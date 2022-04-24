@@ -10,7 +10,7 @@
 #define SERIAL_RATE 31250
 
 // Pin Definitions
-
+// Prueba comit
 // Row input pins
 const int row1Pin = 2;
 const int row2Pin = 3;
