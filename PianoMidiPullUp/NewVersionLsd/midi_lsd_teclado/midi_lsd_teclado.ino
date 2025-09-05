@@ -1,0 +1,788 @@
+#include "MIDIUSB.h"
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+// Configuraciones básicas
+#define NUM_ROWS 6
+#define NUM_COLS 9
+#define START_NOTE 31
+#define NOTE_VELOCITY 127
+#define DEBOUNCE_DELAY 20
+#define BOTH_BUTTONS_TIME 500
+#define AUTO_SLEEP_TIME 30000  // 30 segundos de inactividad
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+
+// Pines
+const int rowPins[NUM_ROWS] = {4,5,6,7,8,9};
+const int dataPin = 10;
+const int latchPin = 11;
+const int clockPin = 12;
+const int octaveUpPin = 13;
+const int octaveDownPin = A1;
+
+// Modos de funcionamiento
+enum DisplayMode {
+  MODE_PERFORMANCE = 0,
+  MODE_CHORD,
+  MODE_SCALE,
+  MODE_OCTAVE,
+  MODE_VELOCITY,
+  MODE_SETTINGS,
+  MODE_TUNER,  // Nuevo modo
+  MODE_COUNT
+};
+
+// Variables básicas optimizadas para aprendizaje
+byte midiChannel = 0;
+byte currentVelocity = 100; // Velocity moderado para aprendizaje
+boolean keyPressed[NUM_ROWS][NUM_COLS];
+uint8_t keyToMidiMap[NUM_ROWS][NUM_COLS];
+unsigned long lastPressTime[NUM_ROWS][NUM_COLS];
+unsigned long upButtonPressTime = 0;
+unsigned long downButtonPressTime = 0;
+bool upButtonPressed = false;
+bool downButtonPressed = false;
+int currentOctaveShift = 1; // Octava +1 para rango medio cómodo
+DisplayMode currentMode = MODE_PERFORMANCE;
+boolean displayNeedsUpdate = true;
+bool displaySleep = false;
+unsigned long lastActivityTime = 0;
+
+// Variables para análisis musical reducido
+byte activeNotes[12]; // Cambio de int a byte
+byte totalActiveNotes = 0;
+unsigned long lastNoteTime = 0;
+byte noteCount = 0; // Cambio de int a byte
+unsigned long noteTimings[5]; // Reducido de 10 a 5
+byte timingIndex = 0;
+
+// Variables para afinador simplificado
+int lastPlayedNote = -1;
+
+// Bits para shift registers
+int bits[] = { 
+  B11111110, B11111101, B11111011, B11110111,
+  B11101111, B11011111, B10111111, B01111111, B11111111
+};
+
+// Nombres de notas y escalas en PROGMEM para ahorrar RAM
+const char noteNames0[] PROGMEM = "Do";
+const char noteNames1[] PROGMEM = "Do#";
+const char noteNames2[] PROGMEM = "Re";
+const char noteNames3[] PROGMEM = "Re#";
+const char noteNames4[] PROGMEM = "Mi";
+const char noteNames5[] PROGMEM = "Fa";
+const char noteNames6[] PROGMEM = "Fa#";
+const char noteNames7[] PROGMEM = "Sol";
+const char noteNames8[] PROGMEM = "Sol#";
+const char noteNames9[] PROGMEM = "La";
+const char noteNames10[] PROGMEM = "La#";
+const char noteNames11[] PROGMEM = "Si";
+
+const char* const noteNames[12] PROGMEM = {
+  noteNames0, noteNames1, noteNames2, noteNames3, noteNames4, noteNames5,
+  noteNames6, noteNames7, noteNames8, noteNames9, noteNames10, noteNames11
+};
+
+const char modeNames0[] PROGMEM = "PERF";
+const char modeNames1[] PROGMEM = "ACORD";
+const char modeNames2[] PROGMEM = "ESCALA";
+const char modeNames3[] PROGMEM = "OCTAV";
+const char modeNames4[] PROGMEM = "VEL";
+const char modeNames5[] PROGMEM = "CONFIG";
+const char modeNames6[] PROGMEM = "DEBUG"; // Cambiado de AFIN a DEBUG
+
+const char* const modeNames[7] PROGMEM = {
+  modeNames0, modeNames1, modeNames2, modeNames3, modeNames4, modeNames5, modeNames6
+};
+
+void setup() {
+  // Inicializar matrices
+  for(int row = 0; row < NUM_ROWS; row++) {
+    for(int col = 0; col < NUM_COLS; col++) {
+      keyPressed[row][col] = false;
+      lastPressTime[row][col] = 0;
+    }
+  }
+  
+  // Inicializar arrays de notas activas
+  for(int i = 0; i < 12; i++) {
+    activeNotes[i] = 0;
+  }
+  for(int i = 0; i < 5; i++) {
+    noteTimings[i] = 0;
+  }
+
+  // Mapeo de notas mejorado - disposición cromática
+  mapNotesToKeys();
+
+  // Configurar pines
+  pinMode(dataPin, OUTPUT);
+  pinMode(clockPin, OUTPUT);
+  pinMode(latchPin, OUTPUT);
+  for(int i = 0; i < NUM_ROWS; i++) {
+    pinMode(rowPins[i], INPUT_PULLUP);
+  }
+  pinMode(octaveUpPin, INPUT_PULLUP);
+  pinMode(octaveDownPin, INPUT_PULLUP);
+
+  Serial.begin(115200); // Cambiado para debug USB
+  Wire.begin();
+
+  // Inicializar OLED
+  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    for(;;);
+  }
+  
+  showSplashScreen();
+  lastActivityTime = millis();
+}
+
+void loop() {
+  unsigned long now = millis();
+  
+  // Manejo de sleep automático
+  if(!displaySleep && (now - lastActivityTime > AUTO_SLEEP_TIME)) {
+    displaySleep = true;
+    display.clearDisplay();
+    display.display();
+  }
+  
+  handleButtons();
+  bool anyKeyPressed = scanKeyboard();
+  updateDisplay(anyKeyPressed);
+  
+  // Pequeña pausa para no saturar
+  delay(1);
+}
+
+void mapNotesToKeys() {
+  // Mapeo mejorado: disposición más musical
+  // Filas como octavas, columnas como semitonos
+  for(int row = 0; row < NUM_ROWS; row++) {
+    for(int col = 0; col < NUM_COLS; col++) {
+      keyToMidiMap[row][col] = START_NOTE + (row * 12) + col;
+      if(keyToMidiMap[row][col] > 127) {
+        keyToMidiMap[row][col] = 127; // Limitar rango MIDI
+      }
+    }
+  }
+}
+
+void showSplashScreen() {
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextSize(2);
+  display.setCursor(15, 10);
+  display.println(F("Raulaxxo"));
+  display.setTextSize(1);
+  display.setCursor(10, 30);
+  display.println(F("Teclado Educativo"));
+  display.setCursor(15, 40);
+  display.println(F("MIDI v2.1 - Do Re Mi"));
+  display.setCursor(5, 50);
+  display.println(F("Inicializando MIDI..."));
+  display.display();
+  
+  // Reinicializar MIDI USB múltiples veces
+  for(int i = 0; i < 3; i++) {
+    MidiUSB.flush();
+    delay(100);
+  }
+  
+  // Test MIDI múltiple para forzar detección
+  for(int i = 0; i < 5; i++) {
+    midiEventPacket_t testNote = {0x09, 0x90, 60, 100};
+    MidiUSB.sendMIDI(testNote);
+    MidiUSB.flush();
+    delay(50);
+    
+    midiEventPacket_t testOff = {0x08, 0x80, 60, 0};
+    MidiUSB.sendMIDI(testOff);
+    MidiUSB.flush();
+    delay(50);
+  }
+  
+  display.setCursor(20, 60);
+  display.println(F("MIDI Listo!"));
+  display.display();
+  delay(1000);
+  displayNeedsUpdate = true;
+}
+
+void handleButtons() {
+  bool currentUpState = !digitalRead(octaveUpPin);
+  bool currentDownState = !digitalRead(octaveDownPin);
+  unsigned long now = millis();
+  
+  if(displaySleep && (currentUpState || currentDownState)) {
+    displaySleep = false;
+    lastActivityTime = now;
+    displayNeedsUpdate = true;
+    return;
+  }
+  
+  // Detectar cuando se presionan los botones
+  if(currentUpState && !upButtonPressed) {
+    upButtonPressed = true;
+    upButtonPressTime = now;
+    lastActivityTime = now;
+  }
+  if(currentDownState && !downButtonPressed) {
+    downButtonPressed = true;
+    downButtonPressTime = now;
+    lastActivityTime = now;
+  }
+  
+  // Detectar cuando se sueltan los botones - LÓGICA CORREGIDA
+  if(!currentUpState && upButtonPressed) {
+    upButtonPressed = false;
+    unsigned long pressDuration = now - upButtonPressTime;
+    
+    // Si ambos botones estuvieron presionados al mismo tiempo = cambio de modo
+    if(downButtonPressed && pressDuration > 200) {
+      currentMode = (DisplayMode)((currentMode + 1) % MODE_COUNT);
+      displayNeedsUpdate = true;
+    } 
+    // Si solo UP estuvo presionado = función UP
+    else if(pressDuration > 50 && pressDuration < 500) {
+      handleUpButton();
+    }
+    upButtonPressTime = 0;
+  }
+  
+  if(!currentDownState && downButtonPressed) {
+    downButtonPressed = false;
+    unsigned long pressDuration = now - downButtonPressTime;
+    
+    // Si ambos botones estuvieron presionados = cambio de modo atrás
+    if(upButtonPressed && pressDuration > 200) {
+      currentMode = (DisplayMode)((currentMode - 1 + MODE_COUNT) % MODE_COUNT);
+      displayNeedsUpdate = true;
+    } 
+    // Si solo DOWN estuvo presionado = función DOWN
+    else if(pressDuration > 50 && pressDuration < 500) {
+      handleDownButton();
+    }
+    downButtonPressTime = 0;
+  }
+}
+
+void handleUpButton() {
+  switch(currentMode) {
+    case MODE_PERFORMANCE:
+    case MODE_CHORD:
+    case MODE_SCALE:
+    case MODE_TUNER:
+    case MODE_OCTAVE:  // Agregado explícitamente
+      currentOctaveShift++;
+      if(currentOctaveShift > 3) currentOctaveShift = 3;
+      break;
+    case MODE_VELOCITY:
+      currentVelocity += 16;
+      if(currentVelocity > 127) currentVelocity = 127;
+      break;
+    case MODE_SETTINGS:
+      midiChannel++;
+      if(midiChannel > 15) midiChannel = 0;
+      break;
+  }
+  displayNeedsUpdate = true;
+}
+
+void handleDownButton() {
+  switch(currentMode) {
+    case MODE_PERFORMANCE:
+    case MODE_CHORD:
+    case MODE_SCALE:
+    case MODE_TUNER:
+    case MODE_OCTAVE:  // Agregado explícitamente
+      currentOctaveShift--;
+      if(currentOctaveShift < -3) currentOctaveShift = -3;
+      break;
+    case MODE_VELOCITY:
+      currentVelocity -= 16;
+      if(currentVelocity < 1) currentVelocity = 1;
+      break;
+    case MODE_SETTINGS:
+      if(midiChannel > 0) midiChannel--;
+      else midiChannel = 15;
+      break;
+  }
+  displayNeedsUpdate = true;
+}
+
+bool scanKeyboard() {
+  bool anyKeyPressed = false;
+
+  for(int col = 0; col < NUM_COLS; col++) {
+    scanColumn(col);
+    
+    for(int row = 0; row < NUM_ROWS; row++) {
+      bool currentState = !digitalRead(rowPins[row]);
+      unsigned long now = millis();
+      
+      if(currentState != keyPressed[row][col] && 
+         now - lastPressTime[row][col] > DEBOUNCE_DELAY) {
+        
+        keyPressed[row][col] = currentState;
+        lastPressTime[row][col] = now;
+        displayNeedsUpdate = true;
+        
+        if(currentState) {
+          noteOn(row, col);
+          updateActiveNotes(row, col, true);
+          lastActivityTime = now;
+          recordNoteTiming(now);
+          noteCount++;
+          lastPlayedNote = keyToMidiMap[row][col] + currentOctaveShift * 12;
+        } else {
+          noteOff(row, col);
+          updateActiveNotes(row, col, false);
+        }
+      }
+
+      if(keyPressed[row][col]) {
+        anyKeyPressed = true;
+      }
+    }
+  }
+  
+  return anyKeyPressed;
+}
+
+void recordNoteTiming(unsigned long noteTime) {
+  noteTimings[timingIndex] = noteTime;
+  timingIndex = (timingIndex + 1) % 5; // Reducido a 5
+  lastNoteTime = noteTime;
+}
+
+// Función simplificada de BPM (sin float)
+int calculateBPM() {
+  if(noteCount < 2) return 0;
+  
+  unsigned long totalInterval = 0;
+  byte validIntervals = 0;
+  
+  for(byte i = 0; i < 4; i++) {
+    byte nextIndex = (i + 1) % 5;
+    if(noteTimings[i] > 0 && noteTimings[nextIndex] > 0) {
+      unsigned long interval = noteTimings[nextIndex] - noteTimings[i];
+      if(interval > 100 && interval < 5000) {
+        totalInterval += interval;
+        validIntervals++;
+      }
+    }
+  }
+  
+  if(validIntervals > 0) {
+    return 60000 / (totalInterval / validIntervals);
+  }
+  return 0;
+}
+
+void updateActiveNotes(int row, int col, bool pressed) {
+  int midiNote = keyToMidiMap[row][col] + currentOctaveShift * 12;
+  midiNote = constrain(midiNote, 0, 127);
+  int semitone = midiNote % 12;
+  
+  if(pressed) {
+    activeNotes[semitone]++;
+    totalActiveNotes++;
+  } else {
+    if(activeNotes[semitone] > 0) {
+      activeNotes[semitone]--;
+      totalActiveNotes--;
+    }
+  }
+}
+
+void updateDisplay(bool anyKeyPressed) {
+  if(displaySleep) return;
+  if(!displayNeedsUpdate && currentMode != MODE_VELOCITY) return;
+  
+  display.clearDisplay();
+  
+  // Barra superior simplificada
+  display.fillRect(0, 0, 128, 10, SSD1306_WHITE);
+  display.setTextColor(SSD1306_BLACK);
+  display.setTextSize(1);
+  display.setCursor(2, 2);
+  
+  // Usar PROGMEM
+  char buffer[8];
+  strcpy_P(buffer, (char*)pgm_read_word(&(modeNames[currentMode])));
+  display.print(buffer);
+  
+  display.print(F(" Ch:"));
+  display.print(midiChannel + 1);
+  
+  display.setCursor(80, 2);
+  display.print(F("O:"));
+  if(currentOctaveShift >= 0) display.print(F("+"));
+  display.print(currentOctaveShift);
+  
+  display.setTextColor(SSD1306_WHITE);
+  
+  switch(currentMode) {
+    case MODE_PERFORMANCE:
+      displayPerformanceMode(anyKeyPressed);
+      break;
+    case MODE_CHORD:
+      displayChordMode();
+      break;
+    case MODE_SCALE:
+      displayScaleMode();
+      break;
+    case MODE_OCTAVE:
+      displayOctaveMode();
+      break;
+    case MODE_VELOCITY:
+      displayVelocityMode();
+      break;
+    case MODE_SETTINGS:
+      displaySettingsMode();
+      break;
+    case MODE_TUNER:
+      displayDebugMode(); // Cambiado de displayTunerMode a displayDebugMode
+      break;
+  }
+  
+  display.display();
+  if(currentMode != MODE_VELOCITY) {
+    displayNeedsUpdate = false;
+  }
+}
+
+void displayPerformanceMode(bool anyKeyPressed) {
+  if(anyKeyPressed) {
+    drawSimplePiano(15, 20);
+    
+    // Mostrar última nota tocada de forma más clara
+    if(lastPlayedNote >= 0) {
+      display.setTextSize(1);
+      display.setCursor(4, 40);
+      display.print(F("Ultima: "));
+      char noteName[6];
+      strcpy_P(noteName, (char*)pgm_read_word(&(noteNames[lastPlayedNote % 12])));
+      display.print(noteName);
+      display.print(F(" ("));
+      display.print(lastPlayedNote);
+      display.print(F(")"));
+      
+      display.setCursor(4, 50);
+      display.print(F("Canal: "));
+      display.print(midiChannel + 1);
+      display.print(F(" Vel: "));
+      display.print(currentVelocity);
+    }
+  } else {
+    display.setTextSize(2);
+    display.setCursor(20, 20);
+    display.println(F("MIDI Listo"));
+    display.setTextSize(1);
+    display.setCursor(15, 40);
+    display.print(F("Octava: "));
+    if(currentOctaveShift >= 0) display.print(F("+"));
+    display.print(currentOctaveShift);
+    display.print(F(" | Canal: "));
+    display.print(midiChannel + 1);
+    
+    // Instrucciones más claras
+    display.setCursor(10, 55);
+    display.print(F("Toca teclas..."));
+  }
+}
+
+void displayDebugMode() {
+  display.setTextSize(1);
+  display.setCursor(4, 15);
+  display.println(F("DEBUG CONEXION:"));
+  
+  // Test de conexión en tiempo real
+  static unsigned long lastTest = 0;
+  static bool testState = false;
+  
+  if(millis() - lastTest > 1000) { // Test cada segundo
+    lastTest = millis();
+    testState = !testState;
+    
+    // Enviar nota de test
+    if(testState) {
+      midiEventPacket_t test = {0x09, 0x90, 72, 80}; // Do agudo
+      MidiUSB.sendMIDI(test);
+      MidiUSB.flush();
+    } else {
+      midiEventPacket_t test = {0x08, 0x80, 72, 0};
+      MidiUSB.sendMIDI(test);
+      MidiUSB.flush();
+    }
+  }
+  
+  display.setCursor(4, 25);
+  display.print(F("Test: "));
+  display.print(testState ? F("ON ") : F("OFF"));
+  display.print(F(" | Notas: "));
+  display.print(noteCount);
+  
+  if(lastPlayedNote >= 0) {
+    display.setCursor(4, 35);
+    display.print(F("Ultima: "));
+    display.print(lastPlayedNote);
+    
+    int noteIndex = lastPlayedNote % 12;
+    char noteName[6];
+    strcpy_P(noteName, (char*)pgm_read_word(&(noteNames[noteIndex])));
+    display.print(F(" ("));
+    display.print(noteName);
+    display.print(F(")"));
+  }
+  
+  display.setCursor(4, 45);
+  display.println(F("Windows:"));
+  display.setCursor(4, 55);
+  display.println(F("Panel→Sonido→MIDI"));
+}
+
+void displayChordMode() {
+  if(totalActiveNotes >= 2) {
+    display.setTextSize(1);
+    display.setCursor(4, 15);
+    display.print(F("ACORDE DETECTADO:"));
+    
+    // Mostrar tipo de acorde básico
+    display.setTextSize(2);
+    display.setCursor(10, 25);
+    if(totalActiveNotes == 2) {
+      display.print(F("Intervalo"));
+    } else if(totalActiveNotes == 3) {
+      display.print(F("Triada"));
+    } else if(totalActiveNotes == 4) {
+      display.print(F("Septima"));
+    } else {
+      display.print(F("Complejo"));
+    }
+    
+    // Mostrar notas del acorde
+    display.setTextSize(1);
+    display.setCursor(4, 45);
+    display.print(F("Notas: "));
+    bool first = true;
+    for(byte i = 0; i < 12; i++) {
+      if(activeNotes[i] > 0) {
+        if(!first) display.print(F("-"));
+        char noteName[6];
+        strcpy_P(noteName, (char*)pgm_read_word(&(noteNames[i])));
+        display.print(noteName);
+        first = false;
+      }
+    }
+    
+    display.setCursor(4, 55);
+    display.print(F("Total: "));
+    display.print(totalActiveNotes);
+    display.print(F(" notas"));
+  } else {
+    display.setTextSize(1);
+    display.setCursor(15, 20);
+    display.println(F("MODO APRENDIZAJE"));
+    display.setCursor(10, 30);
+    display.println(F("Toca 2 o mas"));
+    display.setCursor(10, 40);
+    display.println(F("notas juntas"));
+    display.setCursor(10, 50);
+    display.println(F("para ver acordes"));
+  }
+}
+
+void displayScaleMode() {
+  display.setTextSize(1);
+  display.setCursor(10, 15);
+  display.println(F("ESCALAS Y NOTAS:"));
+  
+  // Mostrar progresión de notas tocadas
+  display.setCursor(4, 25);
+  display.print(F("Secuencia:"));
+  
+  // Mostrar últimas notas en orden
+  display.setCursor(4, 35);
+  if(totalActiveNotes > 0) {
+    display.print(F("Activas ahora: "));
+    display.print(totalActiveNotes);
+  } else {
+    display.print(F("Toca notas para"));
+  }
+  
+  display.setCursor(4, 45);
+  if(totalActiveNotes > 0) {
+    // Mostrar las notas activas en orden cromático
+    bool first = true;
+    byte count = 0;
+    for(byte i = 0; i < 12 && count < 4; i++) {
+      if(activeNotes[i] > 0) {
+        if(!first) display.print(F(" "));
+        char noteName[6];
+        strcpy_P(noteName, (char*)pgm_read_word(&(noteNames[i])));
+        display.print(noteName);
+        first = false;
+        count++;
+      }
+    }
+  } else {
+    display.print(F("ver la escala"));
+  }
+  
+  // Consejos de aprendizaje
+  display.setCursor(4, 55);
+  if(totalActiveNotes >= 3) {
+    display.print(F("¡Buena melodia!"));
+  } else if(totalActiveNotes >= 1) {
+    display.print(F("Añade mas notas"));
+  } else {
+    display.print(F("Empieza con Do"));
+  }
+}
+
+void displayOctaveMode() {
+  // Display grande de octava
+  display.setTextSize(3);
+  display.setCursor(45, 25);
+  if(currentOctaveShift >= 0) display.print(F("+"));
+  display.println(currentOctaveShift);
+  
+  // Debug de botones
+  display.setTextSize(1);
+  display.setCursor(4, 15);
+  display.print(F("UP:"));
+  display.print(!digitalRead(octaveUpPin) ? F("ON") : F("OFF"));
+  display.print(F(" DN:"));
+  display.print(!digitalRead(octaveDownPin) ? F("ON") : F("OFF"));
+  
+  // Barra visual de octava
+  display.drawRect(20, 50, 88, 8, SSD1306_WHITE);
+  int barPos = 20 + ((currentOctaveShift + 3) * 88) / 6; // -3 a +3 mapeado
+  display.fillRect(barPos - 2, 48, 4, 12, SSD1306_WHITE);
+}
+
+void displayVelocityMode() {
+  display.setTextSize(1);
+  display.setCursor(4, 15);
+  display.print(F("Vel: "));
+  display.print(currentVelocity);
+  display.print(F("/127"));
+  
+  // Barra de velocity simplificada
+  int barWidth = map(currentVelocity, 0, 127, 0, 100);
+  display.drawRect(10, 28, 104, 6, SSD1306_WHITE);
+  display.fillRect(10, 28, barWidth, 6, SSD1306_WHITE);
+  
+  display.setCursor(4, 40);
+  display.print(F("Activas: "));
+  display.print(totalActiveNotes);
+  
+  int bpm = calculateBPM();
+  if(bpm > 0) {
+    display.setCursor(4, 50);
+    display.print(F("BPM: "));
+    display.print(bpm);
+  }
+}
+
+void displaySettingsMode() {
+  display.setTextSize(1);
+  
+  display.setCursor(4, 15);
+  display.print(F("Canal: "));
+  display.println(midiChannel + 1);
+  
+  display.setCursor(4, 25);
+  display.print(F("Vel: "));
+  display.println(currentVelocity);
+  
+  display.setCursor(4, 35);
+  display.print(F("Octava: "));
+  if(currentOctaveShift >= 0) display.print(F("+"));
+  display.println(currentOctaveShift);
+  
+  display.setCursor(4, 45);
+  display.print(F("Teclas: 54"));
+  
+  display.setCursor(4, 55);
+  display.print(F("v2.1"));
+}
+
+// Piano simplificado para ahorrar memoria
+void drawSimplePiano(int startX, int startY) {
+  // Solo dibujar rectangulos básicos para las teclas activas
+  byte keyWidth = 8;
+  byte whiteKeys[] = {0, 2, 4, 5, 7, 9, 11};
+  
+  // Teclas blancas
+  for(byte i = 0; i < 7; i++) {
+    int x = startX + i * keyWidth;
+    if(activeNotes[whiteKeys[i]] > 0) {
+      display.fillRect(x, startY, keyWidth - 1, 10, SSD1306_WHITE);
+    } else {
+      display.drawRect(x, startY, keyWidth - 1, 10, SSD1306_WHITE);
+    }
+  }
+  
+  // Teclas negras (simplificado)
+  byte blackKeys[] = {1, 3, 6, 8, 10};
+  byte blackPos[] = {0, 1, 3, 4, 5};
+  for(byte i = 0; i < 5; i++) {
+    int x = startX + blackPos[i] * keyWidth + keyWidth/2;
+    if(activeNotes[blackKeys[i]] > 0) {
+      display.fillRect(x, startY, 3, 6, SSD1306_WHITE);
+    } else {
+      display.drawRect(x, startY, 3, 6, SSD1306_WHITE);
+    }
+  }
+}
+
+void scanColumn(int colNum) {
+  digitalWrite(latchPin, LOW);
+  shiftOut(dataPin, clockPin, MSBFIRST, B11111111);
+  shiftOut(dataPin, clockPin, MSBFIRST, bits[colNum]);
+  digitalWrite(latchPin, HIGH);
+}
+
+void noteOn(int row, int col) {
+  int midiNote = keyToMidiMap[row][col] + currentOctaveShift * 12;
+  midiNote = constrain(midiNote, 0, 127);
+  
+  // Debug MIDI - temporalmente mostrar en pantalla
+  lastPlayedNote = midiNote; // Para mostrar en debug
+  
+  // Usar velocity variable
+  midiEventPacket_t noteOn = {0x09, (uint8_t)(0x90 | midiChannel), (uint8_t)midiNote, currentVelocity};
+  MidiUSB.sendMIDI(noteOn);
+  MidiUSB.flush();
+  
+  // Debug serial
+  Serial.print("NoteON: ");
+  Serial.print(midiNote);
+  Serial.print(" Ch:");
+  Serial.print(midiChannel);
+  Serial.print(" Vel:");
+  Serial.println(currentVelocity);
+}
+
+void noteOff(int row, int col) {
+  int midiNote = keyToMidiMap[row][col] + currentOctaveShift * 12;
+  midiNote = constrain(midiNote, 0, 127);
+  
+  midiEventPacket_t noteOff = {0x08, (uint8_t)(0x80 | midiChannel), (uint8_t)midiNote, 64};
+  MidiUSB.sendMIDI(noteOff);
+  MidiUSB.flush();
+  
+  // Debug serial
+  Serial.print("NoteOFF: ");
+  Serial.print(midiNote);
+  Serial.print(" Ch:");
+  Serial.println(midiChannel);
+}
