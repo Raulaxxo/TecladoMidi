@@ -23,6 +23,7 @@ const int latchPin = 11;
 const int clockPin = 12;
 const int octaveUpPin = 13;
 const int octaveDownPin = A1;
+const int modeButtonPin = A0;  // Nuevo botón para cambio de modo
 
 // Modos de funcionamiento
 enum DisplayMode {
@@ -44,8 +45,10 @@ uint8_t keyToMidiMap[NUM_ROWS][NUM_COLS];
 unsigned long lastPressTime[NUM_ROWS][NUM_COLS];
 unsigned long upButtonPressTime = 0;
 unsigned long downButtonPressTime = 0;
+unsigned long modeButtonPressTime = 0;  // Nuevo
 bool upButtonPressed = false;
 bool downButtonPressed = false;
+bool modeButtonPressed = false;  // Nuevo
 int currentOctaveShift = 1; // Octava +1 para rango medio cómodo
 DisplayMode currentMode = MODE_PERFORMANCE;
 boolean displayNeedsUpdate = true;
@@ -139,6 +142,7 @@ void setup() {
   }
   pinMode(octaveUpPin, INPUT_PULLUP);
   pinMode(octaveDownPin, INPUT_PULLUP);
+  pinMode(modeButtonPin, INPUT_PULLUP);  // Configurar nuevo botón
 
   Serial.begin(115200); // Cambiado para debug USB
   Wire.begin();
@@ -227,55 +231,64 @@ void showSplashScreen() {
 void handleButtons() {
   bool currentUpState = !digitalRead(octaveUpPin);
   bool currentDownState = !digitalRead(octaveDownPin);
+  bool currentModeState = !digitalRead(modeButtonPin);  // Nuevo botón
   unsigned long now = millis();
   
-  if(displaySleep && (currentUpState || currentDownState)) {
+  if(displaySleep && (currentUpState || currentDownState || currentModeState)) {
     displaySleep = false;
     lastActivityTime = now;
     displayNeedsUpdate = true;
     return;
   }
   
-  // Detectar cuando se presionan los botones
+  // ========== BOTÓN DE MODO (Nuevo y simplificado) ==========
+  if(currentModeState && !modeButtonPressed) {
+    modeButtonPressed = true;
+    modeButtonPressTime = now;
+    lastActivityTime = now;
+  }
+  
+  if(!currentModeState && modeButtonPressed) {
+    modeButtonPressed = false;
+    unsigned long pressDuration = now - modeButtonPressTime;
+    
+    if(pressDuration > 50 && pressDuration < 2000) {
+      // Cambiar al siguiente modo
+      currentMode = (DisplayMode)((currentMode + 1) % MODE_COUNT);
+      displayNeedsUpdate = true;
+    }
+    modeButtonPressTime = 0;
+  }
+  
+  // ========== BOTÓN UP (Funciones específicas del modo) ==========
   if(currentUpState && !upButtonPressed) {
     upButtonPressed = true;
     upButtonPressTime = now;
     lastActivityTime = now;
   }
+  
+  if(!currentUpState && upButtonPressed) {
+    upButtonPressed = false;
+    unsigned long pressDuration = now - upButtonPressTime;
+    
+    if(pressDuration > 50 && pressDuration < 2000) {
+      handleUpButton();
+    }
+    upButtonPressTime = 0;
+  }
+  
+  // ========== BOTÓN DOWN (Funciones específicas del modo) ==========
   if(currentDownState && !downButtonPressed) {
     downButtonPressed = true;
     downButtonPressTime = now;
     lastActivityTime = now;
   }
   
-  // Detectar cuando se sueltan los botones - LÓGICA CORREGIDA
-  if(!currentUpState && upButtonPressed) {
-    upButtonPressed = false;
-    unsigned long pressDuration = now - upButtonPressTime;
-    
-    // Si ambos botones estuvieron presionados al mismo tiempo = cambio de modo
-    if(downButtonPressed && pressDuration > 200) {
-      currentMode = (DisplayMode)((currentMode + 1) % MODE_COUNT);
-      displayNeedsUpdate = true;
-    } 
-    // Si solo UP estuvo presionado = función UP
-    else if(pressDuration > 50 && pressDuration < 500) {
-      handleUpButton();
-    }
-    upButtonPressTime = 0;
-  }
-  
   if(!currentDownState && downButtonPressed) {
     downButtonPressed = false;
     unsigned long pressDuration = now - downButtonPressTime;
     
-    // Si ambos botones estuvieron presionados = cambio de modo atrás
-    if(upButtonPressed && pressDuration > 200) {
-      currentMode = (DisplayMode)((currentMode - 1 + MODE_COUNT) % MODE_COUNT);
-      displayNeedsUpdate = true;
-    } 
-    // Si solo DOWN estuvo presionado = función DOWN
-    else if(pressDuration > 50 && pressDuration < 500) {
+    if(pressDuration > 50 && pressDuration < 2000) {
       handleDownButton();
     }
     downButtonPressTime = 0;
@@ -506,45 +519,32 @@ void displayPerformanceMode(bool anyKeyPressed) {
     display.print(F(" | Canal: "));
     display.print(midiChannel + 1);
     
-    // Instrucciones más claras
-    display.setCursor(10, 55);
-    display.print(F("Toca teclas..."));
+    // Instrucciones del nuevo esquema de botones
+    display.setCursor(4, 55);
+    display.print(F("MODE: cambiar | UP/DN: octava"));
   }
 }
 
 void displayDebugMode() {
   display.setTextSize(1);
   display.setCursor(4, 15);
-  display.println(F("DEBUG CONEXION:"));
+  display.println(F("DEBUG BOTONES:"));
   
-  // Test de conexión en tiempo real
-  static unsigned long lastTest = 0;
-  static bool testState = false;
-  
-  if(millis() - lastTest > 1000) { // Test cada segundo
-    lastTest = millis();
-    testState = !testState;
-    
-    // Enviar nota de test
-    if(testState) {
-      midiEventPacket_t test = {0x09, 0x90, 72, 80}; // Do agudo
-      MidiUSB.sendMIDI(test);
-      MidiUSB.flush();
-    } else {
-      midiEventPacket_t test = {0x08, 0x80, 72, 0};
-      MidiUSB.sendMIDI(test);
-      MidiUSB.flush();
-    }
-  }
-  
+  // Estado de todos los botones en tiempo real
   display.setCursor(4, 25);
-  display.print(F("Test: "));
-  display.print(testState ? F("ON ") : F("OFF"));
+  display.print(F("UP: "));
+  display.print(!digitalRead(octaveUpPin) ? F("ON ") : F("OFF"));
+  display.print(F(" DN: "));
+  display.print(!digitalRead(octaveDownPin) ? F("ON ") : F("OFF"));
+  
+  display.setCursor(4, 35);
+  display.print(F("MODE: "));
+  display.print(!digitalRead(modeButtonPin) ? F("ON ") : F("OFF"));
   display.print(F(" | Notas: "));
   display.print(noteCount);
   
   if(lastPlayedNote >= 0) {
-    display.setCursor(4, 35);
+    display.setCursor(4, 45);
     display.print(F("Ultima: "));
     display.print(lastPlayedNote);
     
@@ -556,10 +556,8 @@ void displayDebugMode() {
     display.print(F(")"));
   }
   
-  display.setCursor(4, 45);
-  display.println(F("Windows:"));
   display.setCursor(4, 55);
-  display.println(F("Panel→Sonido→MIDI"));
+  display.println(F("3 botones activos"));
 }
 
 void displayChordMode() {
@@ -678,13 +676,10 @@ void displayOctaveMode() {
   if(currentOctaveShift >= 0) display.print(F("+"));
   display.println(currentOctaveShift);
   
-  // Debug de botones
+  // Info de botones simplificada
   display.setTextSize(1);
   display.setCursor(4, 15);
-  display.print(F("UP:"));
-  display.print(!digitalRead(octaveUpPin) ? F("ON") : F("OFF"));
-  display.print(F(" DN:"));
-  display.print(!digitalRead(octaveDownPin) ? F("ON") : F("OFF"));
+  display.print(F("UP/DN: Octava | MODE: Cambiar"));
   
   // Barra visual de octava
   display.drawRect(20, 50, 88, 8, SSD1306_WHITE);

@@ -47,7 +47,7 @@ Un teclado MIDI educativo basado en Arduino Leonardo con pantalla OLED, diseñad
 - **Pantalla OLED SSD1306** 128x64 (I2C)
 - **Matriz de pulsadores** 6x9 (54 teclas)
 - **2 Shift Registers 74HC595** para multiplexado
-- **2 Botones** para navegación (octava/modo)
+- **3 Botones** para navegación (UP, DOWN, MODE)
 - **Resistencias pull-up** 10kΩ
 
 ### **Conexiones**
@@ -57,8 +57,9 @@ Arduino Leonardo Pinout:
 ├── Pin 10:        Data (74HC595)
 ├── Pin 11:        Latch (74HC595)  
 ├── Pin 12:        Clock (74HC595)
-├── Pin 13:        Botón Octava UP
-├── Pin A1:        Botón Octava DOWN
+├── Pin 13:        Botón UP (octava/función +)
+├── Pin A0:        Botón MODE (cambio de modo)
+├── Pin A1:        Botón DOWN (octava/función -)
 ├── SDA/SCL:       Pantalla OLED I2C
 └── 5V/GND:        Alimentación
 ```
@@ -104,13 +105,17 @@ Fila 2: Fa# Sol Sol# La  La# Si  Do  Do# Re
 ### **1. 🎹 PERFORMANCE** (Modo Principal)
 - **Función**: Tocar libremente con feedback visual
 - **Pantalla**: Última nota tocada, octava actual, canal MIDI
-- **Botones**: UP/DOWN cambian octava (-3 a +3)
+- **Botones**: 
+  - MODE: Cambiar a modo ACORDES
+  - UP/DOWN: Cambiar octava (-3 a +3)
 - **Uso**: Práctica libre, tocar melodías y acordes
 
 ### **2. 🎵 ACORDES** (Análisis de Armonía)
 - **Función**: Detecta y clasifica acordes en tiempo real
 - **Pantalla**: Tipo de acorde (Intervalo/Tríada/Séptima), notas activas
-- **Botones**: UP/DOWN cambian octava
+- **Botones**: 
+  - MODE: Cambiar a modo ESCALAS
+  - UP/DOWN: Cambiar octava
 - **Uso**: Aprender construcción de acordes
 
 ### **3. 📈 ESCALAS** (Guías Interactivas)
@@ -121,34 +126,44 @@ Fila 2: Fa# Sol Sol# La  La# Si  Do  Do# Re
   - Pentatónica (Do-Re-Mi-Sol-La)
   - Blues (Do-Mi♭-Fa-Fa#-Sol-Si♭)
 - **Pantalla**: Patrón de escala, validación en tiempo real
-- **Botones**: UP/DOWN cambian entre escalas
+- **Botones**: 
+  - MODE: Cambiar a modo OCTAVAS
+  - UP/DOWN: Cambiar entre escalas (1/4, 2/4, etc.)
 - **Uso**: Practicar escalas, entender patrones
 
 ### **4. 🎚️ OCTAVAS** (Control de Rango)
 - **Función**: Visualización y control de octava
-- **Pantalla**: Octava actual (grande), barra visual, debug de botones
+- **Pantalla**: Octava actual (grande), barra visual, instrucciones
 - **Rango**: -3 a +3 octavas
-- **Botones**: UP/DOWN cambian octava
+- **Botones**: 
+  - MODE: Cambiar a modo VELOCITY
+  - UP/DOWN: Cambiar octava
 - **Uso**: Cambio rápido de registro
 
 ### **5. 🔊 VELOCITY** (Control de Intensidad)
 - **Función**: Ajuste de intensidad MIDI
 - **Pantalla**: Valor actual, barra visual, estadísticas
 - **Rango**: 1-127 (en incrementos de 16)
-- **Botones**: UP/DOWN ajustan velocity
+- **Botones**: 
+  - MODE: Cambiar a modo CONFIG
+  - UP/DOWN: Ajustar velocity
 - **Uso**: Control dinámico, expresividad
 
 ### **6. ⚙️ CONFIG** (Configuración)
 - **Función**: Ajustes del sistema
 - **Pantalla**: Canal MIDI, velocity, octava, versión
-- **Botones**: UP/DOWN cambian canal MIDI (1-16)
+- **Botones**: 
+  - MODE: Cambiar a modo DEBUG
+  - UP/DOWN: Cambiar canal MIDI (1-16)
 - **Uso**: Configuración técnica
 
 ### **7. 🔧 DEBUG** (Diagnóstico)
-- **Función**: Verificar conexión MIDI y funcionamiento
-- **Pantalla**: Test automático, última nota, estadísticas
-- **Test**: Envía nota cada segundo
-- **Uso**: Solución de problemas, verificación
+- **Función**: Verificar funcionamiento de botones y MIDI
+- **Pantalla**: Estado en tiempo real de los 3 botones, última nota
+- **Botones**: 
+  - MODE: Volver a modo PERFORMANCE
+  - UP/DOWN: Sin función (solo para test)
+- **Uso**: Solución de problemas, verificación de hardware
 
 ## ⚙️ Configuración
 
@@ -162,9 +177,10 @@ Auto-sleep:         30 segundos
 Debounce:           20ms
 ```
 
-### **Navegación**
-- **Botón individual**: Función específica del modo
-- **Ambos botones (>200ms)**: Cambiar modo
+### **Navegación (Nuevo Esquema de 3 Botones)**
+- **Botón MODE**: Cambio entre modos (Performance → Acordes → Escalas → etc.)
+- **Botón UP**: Función específica del modo actual (octava+, velocity+, canal+, etc.)
+- **Botón DOWN**: Función específica del modo actual (octava-, velocity-, canal-, etc.)
 - **Sleep automático**: Pantalla se apaga tras 30s inactividad
 
 ## 🎓 Uso Educativo
