@@ -91,8 +91,8 @@ const byte scalePatterns[][8] PROGMEM = {
 const char scaleNames[][12] PROGMEM = {"Do Mayor", "Do menor", "Pentatonica", "Blues"};
 byte currentScale = 0;
 
-// Bits para shift registers
-int bits[] = { 
+// Bits para shift registers (CORREGIDO: byte en lugar de int)
+byte bits[] = { 
   B11111110, B11111101, B11111011, B11110111,
   B11101111, B11011111, B10111111, B01111111, B11111111
 };
@@ -190,49 +190,121 @@ void setup() {
 void loop() {
   unsigned long now = millis();
   
-  // Manejo de sleep automático
-  if(!displaySleep && (now - lastActivityTime > AUTO_SLEEP_TIME)) {
-    displaySleep = true;
-    display.clearDisplay();
-    display.display();
+  // SIMPLIFICAR: Solo manejar teclas, sin sleep ni complejidad
+  Serial.println("=== LOOP DEBUG ===");
+  
+  // Test de botones cada segundo
+  static unsigned long lastButtonTest = 0;
+  if(now - lastButtonTest > 1000) {
+    lastButtonTest = now;
+    Serial.print("Botones - UP:");
+    Serial.print(digitalRead(octaveUpPin) ? "OFF" : "ON");
+    Serial.print(" DN:");
+    Serial.print(digitalRead(octaveDownPin) ? "OFF" : "ON");
+    Serial.print(" MODE:");
+    Serial.print(digitalRead(modeButtonPin) ? "OFF" : "ON");
+    Serial.print(" | Octave:");
+    Serial.print(currentOctaveShift);
+    Serial.print(" | Canal:");
+    Serial.println(midiChannel);
   }
   
-  handleButtons();
+  // Simplificar manejo de botones
+  static bool lastUpState = true;
+  static bool lastDownState = true;
+  bool currentUpState = digitalRead(octaveUpPin);
+  bool currentDownState = digitalRead(octaveDownPin);
   
-  // Manejo de reproducción de secuencia grabada
-  if(isPlaying && playIndex < recordedCount) {
-    unsigned long playTime = now - playStartTime;
-    if(playTime >= recordedSequence[playIndex].timestamp) {
-      byte note = recordedSequence[playIndex].note;
-      if(recordedSequence[playIndex].isNoteOn) {
-        // Reproducir note on
-        midiEventPacket_t noteOn = {0x09, (uint8_t)(0x90 | midiChannel), note, currentVelocity};
-        MidiUSB.sendMIDI(noteOn);
-        lastPlayedNote = note; // Para mostrar en pantalla
-        activeNotes[note % 12] = 1; // Para visualización
-      } else {
-        // Reproducir note off
-        midiEventPacket_t noteOff = {0x08, (uint8_t)(0x80 | midiChannel), note, 64};
-        MidiUSB.sendMIDI(noteOff);
-        activeNotes[note % 12] = 0; // Para visualización
-      }
-      MidiUSB.flush();
-      playIndex++;
-      displayNeedsUpdate = true;
-    }
+  if(!currentUpState && lastUpState) {
+    currentOctaveShift++;
+    if(currentOctaveShift > 3) currentOctaveShift = 3;
+    Serial.print("OCTAVE UP: ");
+    Serial.println(currentOctaveShift);
+  }
+  if(!currentDownState && lastDownState) {
+    currentOctaveShift--;
+    if(currentOctaveShift < -3) currentOctaveShift = -3;
+    Serial.print("OCTAVE DOWN: ");
+    Serial.println(currentOctaveShift);
+  }
+  lastUpState = currentUpState;
+  lastDownState = currentDownState;
+  
+  // Scan de teclado simplificado
+  bool anyKeyPressed = false;
+  for(int col = 0; col < NUM_COLS; col++) {
+    // Activar columna
+    digitalWrite(latchPin, LOW);
+    shiftOut(dataPin, clockPin, MSBFIRST, B11111111);
+    shiftOut(dataPin, clockPin, MSBFIRST, bits[col]);
+    digitalWrite(latchPin, HIGH);
     
-    // Fin de reproducción
-    if(playIndex >= recordedCount) {
-      isPlaying = false;
-      displayNeedsUpdate = true;
+    delay(1); // Pequeña pausa para estabilizar
+    
+    for(int row = 0; row < NUM_ROWS; row++) {
+      bool currentState = !digitalRead(rowPins[row]);
+      
+      if(currentState != keyPressed[row][col] && 
+         now - lastPressTime[row][col] > DEBOUNCE_DELAY) {
+        
+        keyPressed[row][col] = currentState;
+        lastPressTime[row][col] = now;
+        
+        if(currentState) {
+          // TECLA PRESIONADA
+          int baseNote = keyToMidiMap[row][col];
+          int midiNote = baseNote + currentOctaveShift * 12;
+          
+          Serial.print("*** TECLA PRESIONADA *** Row:");
+          Serial.print(row);
+          Serial.print(" Col:");
+          Serial.print(col);
+          Serial.print(" Base:");
+          Serial.print(baseNote);
+          Serial.print(" Octave:");
+          Serial.print(currentOctaveShift);
+          Serial.print(" Final:");
+          Serial.print(midiNote);
+          
+          if(midiNote >= 0 && midiNote <= 127) {
+            lastPlayedNote = midiNote;
+            
+            // ENVIO MIDI SIMPLE
+            midiEventPacket_t noteOn = {0x09, 0x90, (uint8_t)midiNote, 100};
+            MidiUSB.sendMIDI(noteOn);
+            MidiUSB.flush();
+            
+            Serial.println(" -> MIDI ENVIADO");
+            
+            // Actualizar pantalla simple
+            display.clearDisplay();
+            display.setTextSize(3);
+            display.setCursor(20, 20);
+            display.print(midiNote);
+            display.display();
+            
+          } else {
+            Serial.print(" -> FUERA DE RANGO!");
+            Serial.println();
+          }
+          
+        } else {
+          // TECLA LIBERADA
+          if(lastPlayedNote >= 0) {
+            midiEventPacket_t noteOff = {0x08, 0x80, (uint8_t)lastPlayedNote, 0};
+            MidiUSB.sendMIDI(noteOff);
+            MidiUSB.flush();
+            Serial.print("*** TECLA LIBERADA *** Nota:");
+            Serial.println(lastPlayedNote);
+          }
+        }
+      }
+      
+      if(keyPressed[row][col]) anyKeyPressed = true;
     }
   }
   
-  bool anyKeyPressed = scanKeyboard();
-  updateDisplay(anyKeyPressed);
-  
-  // Pequeña pausa para no saturar
-  delay(1);
+  delay(10); // Pausa más larga para debug
 }
 
 void mapNotesToKeys() {
