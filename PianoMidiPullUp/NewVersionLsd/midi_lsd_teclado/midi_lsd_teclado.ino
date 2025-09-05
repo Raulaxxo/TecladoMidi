@@ -63,6 +63,16 @@ byte timingIndex = 0;
 // Variables para afinador simplificado
 int lastPlayedNote = -1;
 
+// Escalas predefinidas para aprendizaje
+const byte scalePatterns[][8] PROGMEM = {
+  {0, 2, 4, 5, 7, 9, 11, 12}, // Do Mayor
+  {0, 2, 3, 5, 7, 8, 10, 12}, // Do menor
+  {0, 2, 4, 7, 9, 12, 0, 0},  // Pentatónica
+  {0, 1, 4, 5, 7, 8, 11, 12}  // Blues
+};
+const char scaleNames[][12] PROGMEM = {"Do Mayor", "Do menor", "Pentatonica", "Blues"};
+byte currentScale = 0;
+
 // Bits para shift registers
 int bits[] = { 
   B11111110, B11111101, B11111011, B11110111,
@@ -276,11 +286,13 @@ void handleUpButton() {
   switch(currentMode) {
     case MODE_PERFORMANCE:
     case MODE_CHORD:
-    case MODE_SCALE:
     case MODE_TUNER:
     case MODE_OCTAVE:  // Agregado explícitamente
       currentOctaveShift++;
       if(currentOctaveShift > 3) currentOctaveShift = 3;
+      break;
+    case MODE_SCALE:
+      currentScale = (currentScale + 1) % 4; // Cambiar escala
       break;
     case MODE_VELOCITY:
       currentVelocity += 16;
@@ -298,11 +310,13 @@ void handleDownButton() {
   switch(currentMode) {
     case MODE_PERFORMANCE:
     case MODE_CHORD:
-    case MODE_SCALE:
     case MODE_TUNER:
     case MODE_OCTAVE:  // Agregado explícitamente
       currentOctaveShift--;
       if(currentOctaveShift < -3) currentOctaveShift = -3;
+      break;
+    case MODE_SCALE:
+      currentScale = (currentScale + 3) % 4; // Cambiar escala hacia atrás
       break;
     case MODE_VELOCITY:
       currentVelocity -= 16;
@@ -601,50 +615,60 @@ void displayChordMode() {
 
 void displayScaleMode() {
   display.setTextSize(1);
-  display.setCursor(10, 15);
-  display.println(F("ESCALAS Y NOTAS:"));
+  display.setCursor(4, 15);
   
-  // Mostrar progresión de notas tocadas
+  // Mostrar nombre de escala actual
+  char scaleName[12];
+  strcpy_P(scaleName, scaleNames[currentScale]);
+  display.print(F("Escala: "));
+  display.println(scaleName);
+  
+  // Mostrar patrón de la escala
   display.setCursor(4, 25);
-  display.print(F("Secuencia:"));
+  display.print(F("Patron: "));
+  for(byte i = 0; i < 6; i++) {
+    byte note = pgm_read_byte(&scalePatterns[currentScale][i]);
+    if(note == 0 && i > 0) break;
+    
+    char noteName[6];
+    strcpy_P(noteName, (char*)pgm_read_word(&(noteNames[note % 12])));
+    display.print(noteName);
+    if(i < 5 && pgm_read_byte(&scalePatterns[currentScale][i+1]) != 0) display.print(F("-"));
+  }
   
-  // Mostrar últimas notas en orden
+  // Verificar si estás tocando la escala correctamente
   display.setCursor(4, 35);
   if(totalActiveNotes > 0) {
-    display.print(F("Activas ahora: "));
-    display.print(totalActiveNotes);
-  } else {
-    display.print(F("Toca notas para"));
-  }
-  
-  display.setCursor(4, 45);
-  if(totalActiveNotes > 0) {
-    // Mostrar las notas activas en orden cromático
-    bool first = true;
-    byte count = 0;
-    for(byte i = 0; i < 12 && count < 4; i++) {
+    bool correctScale = true;
+    for(byte i = 0; i < 12; i++) {
       if(activeNotes[i] > 0) {
-        if(!first) display.print(F(" "));
-        char noteName[6];
-        strcpy_P(noteName, (char*)pgm_read_word(&(noteNames[i])));
-        display.print(noteName);
-        first = false;
-        count++;
+        bool inScale = false;
+        for(byte j = 0; j < 8; j++) {
+          if((pgm_read_byte(&scalePatterns[currentScale][j]) % 12) == i) {
+            inScale = true;
+            break;
+          }
+        }
+        if(!inScale) correctScale = false;
       }
     }
+    
+    if(correctScale && totalActiveNotes >= 3) {
+      display.print(F("¡Escala correcta!"));
+    } else if(totalActiveNotes >= 1) {
+      display.print(F("Sigue el patron"));
+    }
   } else {
-    display.print(F("ver la escala"));
+    display.print(F("Toca las notas"));
   }
   
-  // Consejos de aprendizaje
-  display.setCursor(4, 55);
-  if(totalActiveNotes >= 3) {
-    display.print(F("¡Buena melodia!"));
-  } else if(totalActiveNotes >= 1) {
-    display.print(F("Añade mas notas"));
-  } else {
-    display.print(F("Empieza con Do"));
-  }
+  // Instrucciones
+  display.setCursor(4, 50);
+  display.print(F("Botones: cambiar"));
+  display.setCursor(4, 60);
+  display.print(F("escala ("));
+  display.print(currentScale + 1);
+  display.print(F("/4)"));
 }
 
 void displayOctaveMode() {
