@@ -5,6 +5,7 @@ Un teclado MIDI educativo basado en Arduino Leonardo con pantalla OLED, diseñad
 ![Estado del Proyecto](https://img.shields.io/badge/Estado-Funcional-brightgreen)
 ![Versión](https://img.shields.io/badge/Versión-2.1-blue)
 ![Arduino](https://img.shields.io/badge/Arduino-Leonardo-orange)
+![Última Actualización](https://img.shields.io/badge/Actualizado-Sept_2025-yellow)
 
 ## 📋 Tabla de Contenidos
 
@@ -22,23 +23,27 @@ Un teclado MIDI educativo basado en Arduino Leonardo con pantalla OLED, diseñad
 
 ### 🎵 **Funcionalidades Actuales**
 - **54 teclas** (matriz 6x9) con detección individual
-- **Pantalla OLED 128x64** con interfaz visual educativa
-- **6 modos interactivos** de aprendizaje musical
+- **Pantalla OLED 128x64** con interfaz visual mejorada
+- **7 modos interactivos** de aprendizaje musical
 - **Notación en solfeo** (Do, Re, Mi, Fa, Sol, La, Si)
 - **Conectividad MIDI USB** nativa
 - **Detección de acordes** en tiempo real
 - **Escalas interactivas** con validación
+- **Sistema de grabación/reproducción** de secuencias musicales
 - **Control de octava** (-3 a +3)
 - **Velocity variable** (1-127)
 - **16 canales MIDI** seleccionables
 - **Modo debug** para diagnóstico
+- **Visualización de teclado** en tiempo real
 
 ### 🎯 **Optimizado para Aprendizaje**
 - **Feedback visual** inmediato de notas y acordes
 - **Guías de escalas** predefinidas (Mayor, menor, Pentatónica, Blues)
 - **Validación en tiempo real** de patrones musicales
-- **Interfaz intuitiva** con navegación por botones
+- **Grabación de ejercicios** para práctica repetitiva
+- **Interfaz intuitiva** con navegación por 3 botones
 - **Modo sleep automático** para conservar energía
+- **Pantalla principal optimizada** con teclado visual y nota central
 
 ## 🔧 Hardware Requerido
 
@@ -102,13 +107,16 @@ Fila 2: Fa# Sol Sol# La  La# Si  Do  Do# Re
 
 ## 🎮 Modos de Funcionamiento
 
-### **1. 🎹 PERFORMANCE** (Modo Principal)
-- **Función**: Tocar libremente con feedback visual
-- **Pantalla**: Última nota tocada, octava actual, canal MIDI
+### **1. 🎹 PERFORMANCE** (Modo Principal) - ✨ RENOVADO
+- **Función**: Tocar libremente con feedback visual mejorado
+- **Pantalla**: 
+  - Nota actual en **grande al centro** (Do, Re, Mi, etc.)
+  - **Teclado visual** en la parte inferior con tecla presionada resaltada
+  - Diseño limpio y minimalista
 - **Botones**: 
   - MODE: Cambiar a modo ACORDES
   - UP/DOWN: Cambiar octava (-3 a +3)
-- **Uso**: Práctica libre, tocar melodías y acordes
+- **Uso**: Práctica libre, aprendizaje visual de notas
 
 ### **2. 🎵 ACORDES** (Análisis de Armonía)
 - **Función**: Detecta y clasifica acordes en tiempo real
@@ -136,18 +144,23 @@ Fila 2: Fa# Sol Sol# La  La# Si  Do  Do# Re
 - **Pantalla**: Octava actual (grande), barra visual, instrucciones
 - **Rango**: -3 a +3 octavas
 - **Botones**: 
-  - MODE: Cambiar a modo VELOCITY
+  - MODE: Cambiar a modo GRABADOR
   - UP/DOWN: Cambiar octava
 - **Uso**: Cambio rápido de registro
 
-### **5. 🔊 VELOCITY** (Control de Intensidad)
-- **Función**: Ajuste de intensidad MIDI
-- **Pantalla**: Valor actual, barra visual, estadísticas
-- **Rango**: 1-127 (en incrementos de 16)
+### **5. 🎙️ GRABADOR** (Grabación/Reproducción) - 🆕 NUEVO
+- **Función**: Graba y reproduce secuencias musicales con timing preciso
+- **Capacidad**: Hasta 20 notas con timestamps exactos
+- **Pantalla**: 
+  - Estado actual (GRABANDO/REPRODUCIENDO/LISTO)
+  - Contador de notas grabadas
+  - Barra de progreso durante reproducción
+  - Indicador visual parpadeante durante grabación
 - **Botones**: 
   - MODE: Cambiar a modo CONFIG
-  - UP/DOWN: Ajustar velocity
-- **Uso**: Control dinámico, expresividad
+  - UP: Iniciar/Parar grabación
+  - DOWN: Reproducir/Parar reproducción
+- **Uso**: Practicar melodías, crear ejercicios, repetir patrones
 
 ### **6. ⚙️ CONFIG** (Configuración)
 - **Función**: Ajustes del sistema
@@ -369,7 +382,51 @@ Funcionalidades móviles:
 - 🔧 **Diseños de hardware**
 - 🎵 **Contenido educativo** (escalas, progresiones)
 
-## 📄 Licencia
+## � Changelog
+
+### **v2.1 - 5 Septiembre 2025** 🆕
+#### **✨ Nuevas Características:**
+- **🎙️ Modo GRABADOR**: Sistema completo de grabación/reproducción
+  - Graba hasta 20 notas con timing preciso
+  - Reproducción con timing original
+  - Indicadores visuales de estado (grabando/reproduciendo)
+  - Barra de progreso durante reproducción
+  - Útil para práctica y creación de ejercicios
+
+#### **🎨 Mejoras de Interfaz:**
+- **🎹 Modo PERFORMANCE renovado**:
+  - Nota actual mostrada en **grande al centro**
+  - **Teclado visual** en tiempo real en la parte inferior
+  - Teclas presionadas se **resaltan visualmente**
+  - Diseño limpio y minimalista
+  - Eliminada información técnica innecesaria
+
+#### **🔧 Optimizaciones Técnicas:**
+- Reemplazado modo VELOCITY por modo GRABADOR más útil
+- Mejorada visualización de teclado con proporciones realistas
+- Optimización de memoria para sistema de grabación
+- Estructura de datos eficiente para secuencias musicales
+
+#### **📚 Documentación:**
+- README actualizado con nuevas características
+- Documentación completa del sistema de grabación
+- Guías de uso para el modo GRABADOR
+- Changelog detallado implementado
+
+### **v2.0 - Agosto 2025**
+- Sistema de 3 botones (UP/DOWN/MODE)
+- Optimización de memoria PROGMEM
+- 7 modos de funcionamiento
+- Notación solfeo española
+- Display OLED optimizado
+
+### **v1.0 - Inicial**
+- Matriz 6x9 teclas funcional
+- MIDI USB básico
+- 5 modos básicos
+- Sistema 2 botones
+
+## �📄 Licencia
 
 Este proyecto está bajo la Licencia MIT - ver el archivo [LICENSE](LICENSE) para detalles.
 
