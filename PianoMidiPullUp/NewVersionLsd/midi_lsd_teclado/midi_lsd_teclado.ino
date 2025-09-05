@@ -31,7 +31,7 @@ enum DisplayMode {
   MODE_CHORD,
   MODE_SCALE,
   MODE_OCTAVE,
-  MODE_VELOCITY,
+  MODE_RECORDER,  // Nuevo modo de grabación/reproducción
   MODE_SETTINGS,
   MODE_TUNER,  // Nuevo modo
   MODE_COUNT
@@ -65,6 +65,21 @@ byte timingIndex = 0;
 
 // Variables para afinador simplificado
 int lastPlayedNote = -1;
+
+// Variables para el modo grabador/reproductor
+#define MAX_RECORDED_NOTES 20  // Máximo de notas que se pueden grabar
+struct RecordedNote {
+  byte note;
+  unsigned long timestamp;
+  bool isNoteOn;  // true = note on, false = note off
+};
+RecordedNote recordedSequence[MAX_RECORDED_NOTES];
+byte recordedCount = 0;
+bool isRecording = false;
+bool isPlaying = false;
+unsigned long recordStartTime = 0;
+unsigned long playStartTime = 0;
+byte playIndex = 0;
 
 // Escalas predefinidas para aprendizaje
 const byte scalePatterns[][8] PROGMEM = {
@@ -167,6 +182,36 @@ void loop() {
   }
   
   handleButtons();
+  
+  // Manejo de reproducción de secuencia grabada
+  if(isPlaying && playIndex < recordedCount) {
+    unsigned long playTime = now - playStartTime;
+    if(playTime >= recordedSequence[playIndex].timestamp) {
+      byte note = recordedSequence[playIndex].note;
+      if(recordedSequence[playIndex].isNoteOn) {
+        // Reproducir note on
+        midiEventPacket_t noteOn = {0x09, (uint8_t)(0x90 | midiChannel), note, currentVelocity};
+        MidiUSB.sendMIDI(noteOn);
+        lastPlayedNote = note; // Para mostrar en pantalla
+        activeNotes[note % 12] = 1; // Para visualización
+      } else {
+        // Reproducir note off
+        midiEventPacket_t noteOff = {0x08, (uint8_t)(0x80 | midiChannel), note, 64};
+        MidiUSB.sendMIDI(noteOff);
+        activeNotes[note % 12] = 0; // Para visualización
+      }
+      MidiUSB.flush();
+      playIndex++;
+      displayNeedsUpdate = true;
+    }
+    
+    // Fin de reproducción
+    if(playIndex >= recordedCount) {
+      isPlaying = false;
+      displayNeedsUpdate = true;
+    }
+  }
+  
   bool anyKeyPressed = scanKeyboard();
   updateDisplay(anyKeyPressed);
   
@@ -307,9 +352,15 @@ void handleUpButton() {
     case MODE_SCALE:
       currentScale = (currentScale + 1) % 4; // Cambiar escala
       break;
-    case MODE_VELOCITY:
-      currentVelocity += 16;
-      if(currentVelocity > 127) currentVelocity = 127;
+    case MODE_RECORDER:
+      // UP: Iniciar/Parar grabación
+      if(!isRecording && !isPlaying) {
+        isRecording = true;
+        recordedCount = 0;
+        recordStartTime = millis();
+      } else if(isRecording) {
+        isRecording = false;
+      }
       break;
     case MODE_SETTINGS:
       midiChannel++;
@@ -331,9 +382,24 @@ void handleDownButton() {
     case MODE_SCALE:
       currentScale = (currentScale + 3) % 4; // Cambiar escala hacia atrás
       break;
-    case MODE_VELOCITY:
-      currentVelocity -= 16;
-      if(currentVelocity < 1) currentVelocity = 1;
+    case MODE_RECORDER:
+      // DOWN: Reproducir/Parar reproducción
+      if(!isRecording && !isPlaying && recordedCount > 0) {
+        isPlaying = true;
+        playStartTime = millis();
+        playIndex = 0;
+      } else if(isPlaying) {
+        isPlaying = false;
+        // Parar todas las notas
+        for(int i = 0; i < 12; i++) {
+          if(activeNotes[i] > 0) {
+            midiEventPacket_t noteOff = {0x08, 0x80, 60 + i, 0};
+            MidiUSB.sendMIDI(noteOff);
+            activeNotes[i] = 0;
+          }
+        }
+        MidiUSB.flush();
+      }
       break;
     case MODE_SETTINGS:
       if(midiChannel > 0) midiChannel--;
@@ -430,7 +496,7 @@ void updateActiveNotes(int row, int col, bool pressed) {
 
 void updateDisplay(bool anyKeyPressed) {
   if(displaySleep) return;
-  if(!displayNeedsUpdate && currentMode != MODE_VELOCITY) return;
+  if(!displayNeedsUpdate && currentMode != MODE_RECORDER) return;
   
   display.clearDisplay();
   
@@ -468,8 +534,8 @@ void updateDisplay(bool anyKeyPressed) {
     case MODE_OCTAVE:
       displayOctaveMode();
       break;
-    case MODE_VELOCITY:
-      displayVelocityMode();
+    case MODE_RECORDER:
+      displayRecorderMode();
       break;
     case MODE_SETTINGS:
       displaySettingsMode();
@@ -480,49 +546,23 @@ void updateDisplay(bool anyKeyPressed) {
   }
   
   display.display();
-  if(currentMode != MODE_VELOCITY) {
+  if(currentMode != MODE_RECORDER) {
     displayNeedsUpdate = false;
   }
 }
 
 void displayPerformanceMode(bool anyKeyPressed) {
-  if(anyKeyPressed) {
-    drawSimplePiano(15, 20);
-    
-    // Mostrar última nota tocada de forma más clara
-    if(lastPlayedNote >= 0) {
-      display.setTextSize(1);
-      display.setCursor(4, 35);
-      display.print(F("Ultima: "));
-      char noteName[6];
-      strcpy_P(noteName, (char*)pgm_read_word(&(noteNames[lastPlayedNote % 12])));
-      display.print(noteName);
-      display.print(F(" ("));
-      display.print(lastPlayedNote);
-      display.print(F(")"));
-      
-      display.setCursor(4, 45);
-      display.print(F("Ch:"));
-      display.print(midiChannel + 1);
-      display.print(F(" Vel:"));
-      display.print(currentVelocity);
-    }
-  } else {
-    display.setTextSize(2);
-    display.setCursor(20, 20);
-    display.println(F("MIDI Listo"));
-    display.setTextSize(1);
-    display.setCursor(15, 35);
-    display.print(F("Octava: "));
-    if(currentOctaveShift >= 0) display.print(F("+"));
-    display.print(currentOctaveShift);
-    display.print(F(" | Ch:"));
-    display.print(midiChannel + 1);
-    
-    // Instrucciones del nuevo esquema de botones (línea 45)
-    display.setCursor(4, 45);
-    display.print(F("MODE:cambiar UP/DN:octava"));
+  // Mostrar nota actual en el centro de la pantalla (grande)
+  if(lastPlayedNote >= 0) {
+    display.setTextSize(3);
+    display.setCursor(25, 15);
+    char noteName[6];
+    strcpy_P(noteName, (char*)pgm_read_word(&(noteNames[lastPlayedNote % 12])));
+    display.print(noteName);
   }
+  
+  // Siempre dibujar la octava completa en la parte inferior (una línea más arriba)
+  drawFullOctavePiano(4, 37);
 }
 
 void displayDebugMode() {
@@ -677,27 +717,51 @@ void displayOctaveMode() {
   display.fillRect(barPos - 2, 48, 4, 12, SSD1306_WHITE);
 }
 
-void displayVelocityMode() {
+void displayRecorderMode() {
   display.setTextSize(1);
   display.setCursor(4, 15);
-  display.print(F("Velocity: "));
-  display.print(currentVelocity);
-  display.print(F("/127"));
+  display.print(F("GRABADOR:"));
   
-  // Barra de velocity simplificada
-  int barWidth = map(currentVelocity, 0, 127, 0, 100);
-  display.drawRect(10, 25, 104, 6, SSD1306_WHITE);
-  display.fillRect(10, 25, barWidth, 6, SSD1306_WHITE);
-  
-  display.setCursor(4, 35);
-  display.print(F("Activas: "));
-  display.print(totalActiveNotes);
-  
-  int bpm = calculateBPM();
-  if(bpm > 0) {
-    display.setCursor(4, 45);
-    display.print(F("BPM: "));
-    display.print(bpm);
+  if(isRecording) {
+    display.print(F(" GRABANDO..."));
+    display.setCursor(4, 25);
+    display.print(F("Notas: "));
+    display.print(recordedCount);
+    display.print(F("/"));
+    display.print(MAX_RECORDED_NOTES);
+    
+    // Indicador de grabación parpadeante
+    if((millis() / 250) % 2) {
+      display.fillCircle(120, 18, 3, SSD1306_WHITE);
+    }
+  } else if(isPlaying) {
+    display.print(F(" REPRODUCIENDO"));
+    display.setCursor(4, 25);
+    display.print(F("Nota: "));
+    display.print(playIndex + 1);
+    display.print(F("/"));
+    display.print(recordedCount);
+    
+    // Barra de progreso
+    if(recordedCount > 0) {
+      int progress = map(playIndex, 0, recordedCount - 1, 0, 100);
+      display.drawRect(10, 35, 104, 4, SSD1306_WHITE);
+      display.fillRect(10, 35, progress, 4, SSD1306_WHITE);
+    }
+  } else {
+    display.setCursor(4, 25);
+    display.print(F("Guardadas: "));
+    display.print(recordedCount);
+    display.print(F("/"));
+    display.print(MAX_RECORDED_NOTES);
+    
+    display.setCursor(4, 35);
+    display.print(F("UP: Grabar | DN: Reproducir"));
+    
+    if(recordedCount == 0) {
+      display.setCursor(4, 45);
+      display.print(F("Toca para empezar"));
+    }
   }
 }
 
@@ -719,6 +783,89 @@ void displaySettingsMode() {
   
   display.setCursor(4, 45);
   display.print(F("Teclas: 54 (6x9)"));
+}
+
+// Octava completa en la parte inferior con nota marcada
+void drawFullOctavePiano(int startX, int startY) {
+  byte keyWidth = 15;  // Teclas más anchas para mejor visualización
+  byte keyHeight = 25; // Teclas más largas usando más líneas
+  byte blackKeyHeight = 18; // Teclas negras también más largas
+  
+  // Notas de una octava: Do, Do#, Re, Re#, Mi, Fa, Fa#, Sol, Sol#, La, La#, Si
+  byte whiteKeys[] = {0, 2, 4, 5, 7, 9, 11};  // Do, Re, Mi, Fa, Sol, La, Si
+  byte blackKeys[] = {1, 3, 6, 8, 10};        // Do#, Re#, Fa#, Sol#, La#
+  byte blackPos[] = {0, 1, 3, 4, 5};          // Posiciones de teclas negras
+  
+  // Calcular qué nota está sonando en esta octava (0-11)
+  int currentNoteInOctave = -1;
+  if(lastPlayedNote >= 0) {
+    currentNoteInOctave = lastPlayedNote % 12;
+  }
+  
+  // Dibujar teclas blancas
+  for(byte i = 0; i < 7; i++) {
+    int x = startX + i * keyWidth;
+    bool isPressed = (currentNoteInOctave == whiteKeys[i]);
+    
+    if(isPressed) {
+      // Tecla presionada: rellena con efecto
+      display.fillRect(x, startY, keyWidth - 2, keyHeight, SSD1306_WHITE);
+      display.drawRect(x, startY, keyWidth - 2, keyHeight, SSD1306_BLACK);
+    } else {
+      // Tecla normal: solo borde
+      display.drawRect(x, startY, keyWidth - 2, keyHeight, SSD1306_WHITE);
+    }
+  }
+  
+  // Dibujar teclas negras encima
+  for(byte i = 0; i < 5; i++) {
+    int x = startX + blackPos[i] * keyWidth + keyWidth/2;
+    bool isPressed = (currentNoteInOctave == blackKeys[i]);
+    
+    if(isPressed) {
+      // Tecla negra presionada: blanca con borde negro
+      display.fillRect(x, startY, 6, blackKeyHeight, SSD1306_WHITE);
+      display.drawRect(x, startY, 6, blackKeyHeight, SSD1306_BLACK);
+    } else {
+      // Tecla negra normal: negra con borde blanco
+      display.fillRect(x, startY, 6, blackKeyHeight, SSD1306_BLACK);
+      display.drawRect(x, startY, 6, blackKeyHeight, SSD1306_WHITE);
+    }
+  }
+}
+
+// Piano mejorado con mejor visualización
+void drawEnhancedPiano(int startX, int startY) {
+  byte keyWidth = 10;
+  byte whiteKeys[] = {0, 2, 4, 5, 7, 9, 11};
+  
+  // Dibujar teclas blancas (más altas)
+  for(byte i = 0; i < 7; i++) {
+    int x = startX + i * keyWidth;
+    if(activeNotes[whiteKeys[i]] > 0) {
+      // Tecla presionada: rellena
+      display.fillRect(x, startY, keyWidth - 1, 12, SSD1306_WHITE);
+      display.drawRect(x, startY, keyWidth - 1, 12, SSD1306_BLACK);
+    } else {
+      // Tecla normal: solo borde
+      display.drawRect(x, startY, keyWidth - 1, 12, SSD1306_WHITE);
+    }
+  }
+  
+  // Dibujar teclas negras encima (más pequeñas)
+  byte blackKeys[] = {1, 3, 6, 8, 10};
+  byte blackPos[] = {0, 1, 3, 4, 5};
+  for(byte i = 0; i < 5; i++) {
+    int x = startX + blackPos[i] * keyWidth + keyWidth/2;
+    if(activeNotes[blackKeys[i]] > 0) {
+      // Tecla negra presionada: blanca
+      display.fillRect(x, startY, 4, 7, SSD1306_WHITE);
+    } else {
+      // Tecla negra normal: negra con borde blanco
+      display.fillRect(x, startY, 4, 7, SSD1306_BLACK);
+      display.drawRect(x, startY, 4, 7, SSD1306_WHITE);
+    }
+  }
 }
 
 // Piano simplificado para ahorrar memoria
@@ -764,6 +911,14 @@ void noteOn(int row, int col) {
   // Debug MIDI - temporalmente mostrar en pantalla
   lastPlayedNote = midiNote; // Para mostrar en debug
   
+  // Grabación de notas
+  if(isRecording && recordedCount < MAX_RECORDED_NOTES) {
+    recordedSequence[recordedCount].note = midiNote;
+    recordedSequence[recordedCount].timestamp = millis() - recordStartTime;
+    recordedSequence[recordedCount].isNoteOn = true;
+    recordedCount++;
+  }
+  
   // Usar velocity variable
   midiEventPacket_t noteOn = {0x09, (uint8_t)(0x90 | midiChannel), (uint8_t)midiNote, currentVelocity};
   MidiUSB.sendMIDI(noteOn);
@@ -781,6 +936,14 @@ void noteOn(int row, int col) {
 void noteOff(int row, int col) {
   int midiNote = keyToMidiMap[row][col] + currentOctaveShift * 12;
   midiNote = constrain(midiNote, 0, 127);
+  
+  // Grabación de notas
+  if(isRecording && recordedCount < MAX_RECORDED_NOTES) {
+    recordedSequence[recordedCount].note = midiNote;
+    recordedSequence[recordedCount].timestamp = millis() - recordStartTime;
+    recordedSequence[recordedCount].isNoteOn = false;
+    recordedCount++;
+  }
   
   midiEventPacket_t noteOff = {0x08, (uint8_t)(0x80 | midiChannel), (uint8_t)midiNote, 64};
   MidiUSB.sendMIDI(noteOff);
