@@ -492,7 +492,7 @@ void displayPerformanceMode(bool anyKeyPressed) {
     // Mostrar última nota tocada de forma más clara
     if(lastPlayedNote >= 0) {
       display.setTextSize(1);
-      display.setCursor(4, 40);
+      display.setCursor(4, 35);
       display.print(F("Ultima: "));
       char noteName[6];
       strcpy_P(noteName, (char*)pgm_read_word(&(noteNames[lastPlayedNote % 12])));
@@ -501,10 +501,10 @@ void displayPerformanceMode(bool anyKeyPressed) {
       display.print(lastPlayedNote);
       display.print(F(")"));
       
-      display.setCursor(4, 50);
-      display.print(F("Canal: "));
+      display.setCursor(4, 45);
+      display.print(F("Ch:"));
       display.print(midiChannel + 1);
-      display.print(F(" Vel: "));
+      display.print(F(" Vel:"));
       display.print(currentVelocity);
     }
   } else {
@@ -512,16 +512,16 @@ void displayPerformanceMode(bool anyKeyPressed) {
     display.setCursor(20, 20);
     display.println(F("MIDI Listo"));
     display.setTextSize(1);
-    display.setCursor(15, 40);
+    display.setCursor(15, 35);
     display.print(F("Octava: "));
     if(currentOctaveShift >= 0) display.print(F("+"));
     display.print(currentOctaveShift);
-    display.print(F(" | Canal: "));
+    display.print(F(" | Ch:"));
     display.print(midiChannel + 1);
     
-    // Instrucciones del nuevo esquema de botones
-    display.setCursor(4, 55);
-    display.print(F("MODE: cambiar | UP/DN: octava"));
+    // Instrucciones del nuevo esquema de botones (línea 45)
+    display.setCursor(4, 45);
+    display.print(F("MODE:cambiar UP/DN:octava"));
   }
 }
 
@@ -548,16 +548,13 @@ void displayDebugMode() {
     display.print(F("Ultima: "));
     display.print(lastPlayedNote);
     
+    // Simplificar nombre de nota para que quepa
     int noteIndex = lastPlayedNote % 12;
     char noteName[6];
     strcpy_P(noteName, (char*)pgm_read_word(&(noteNames[noteIndex])));
-    display.print(F(" ("));
+    display.print(F(" "));
     display.print(noteName);
-    display.print(F(")"));
   }
-  
-  display.setCursor(4, 55);
-  display.println(F("3 botones activos"));
 }
 
 void displayChordMode() {
@@ -579,25 +576,22 @@ void displayChordMode() {
       display.print(F("Complejo"));
     }
     
-    // Mostrar notas del acorde
+    // Mostrar notas del acorde (más compacto)
     display.setTextSize(1);
-    display.setCursor(4, 45);
+    display.setCursor(4, 43);
     display.print(F("Notas: "));
     bool first = true;
-    for(byte i = 0; i < 12; i++) {
+    byte count = 0;
+    for(byte i = 0; i < 12 && count < 6; i++) {
       if(activeNotes[i] > 0) {
-        if(!first) display.print(F("-"));
+        if(!first) display.print(F(" "));
         char noteName[6];
         strcpy_P(noteName, (char*)pgm_read_word(&(noteNames[i])));
         display.print(noteName);
         first = false;
+        count++;
       }
     }
-    
-    display.setCursor(4, 55);
-    display.print(F("Total: "));
-    display.print(totalActiveNotes);
-    display.print(F(" notas"));
   } else {
     display.setTextSize(1);
     display.setCursor(15, 20);
@@ -605,9 +599,7 @@ void displayChordMode() {
     display.setCursor(10, 30);
     display.println(F("Toca 2 o mas"));
     display.setCursor(10, 40);
-    display.println(F("notas juntas"));
-    display.setCursor(10, 50);
-    display.println(F("para ver acordes"));
+    display.println(F("notas para acordes"));
   }
 }
 
@@ -621,9 +613,9 @@ void displayScaleMode() {
   display.print(F("Escala: "));
   display.println(scaleName);
   
-  // Mostrar patrón de la escala
+  // Mostrar patrón de la escala (más compacto)
   display.setCursor(4, 25);
-  display.print(F("Patron: "));
+  display.print(F("Notas: "));
   for(byte i = 0; i < 6; i++) {
     byte note = pgm_read_byte(&scalePatterns[currentScale][i]);
     if(note == 0 && i > 0) break;
@@ -631,7 +623,7 @@ void displayScaleMode() {
     char noteName[6];
     strcpy_P(noteName, (char*)pgm_read_word(&(noteNames[note % 12])));
     display.print(noteName);
-    if(i < 5 && pgm_read_byte(&scalePatterns[currentScale][i+1]) != 0) display.print(F("-"));
+    if(i < 5 && pgm_read_byte(&scalePatterns[currentScale][i+1]) != 0) display.print(F(" "));
   }
   
   // Verificar si estás tocando la escala correctamente
@@ -660,11 +652,9 @@ void displayScaleMode() {
     display.print(F("Toca las notas"));
   }
   
-  // Instrucciones
-  display.setCursor(4, 50);
-  display.print(F("Botones: cambiar"));
-  display.setCursor(4, 60);
-  display.print(F("escala ("));
+  // Instrucciones (línea 45)
+  display.setCursor(4, 45);
+  display.print(F("UP/DN: cambiar ("));
   display.print(currentScale + 1);
   display.print(F("/4)"));
 }
@@ -690,22 +680,22 @@ void displayOctaveMode() {
 void displayVelocityMode() {
   display.setTextSize(1);
   display.setCursor(4, 15);
-  display.print(F("Vel: "));
+  display.print(F("Velocity: "));
   display.print(currentVelocity);
   display.print(F("/127"));
   
   // Barra de velocity simplificada
   int barWidth = map(currentVelocity, 0, 127, 0, 100);
-  display.drawRect(10, 28, 104, 6, SSD1306_WHITE);
-  display.fillRect(10, 28, barWidth, 6, SSD1306_WHITE);
+  display.drawRect(10, 25, 104, 6, SSD1306_WHITE);
+  display.fillRect(10, 25, barWidth, 6, SSD1306_WHITE);
   
-  display.setCursor(4, 40);
+  display.setCursor(4, 35);
   display.print(F("Activas: "));
   display.print(totalActiveNotes);
   
   int bpm = calculateBPM();
   if(bpm > 0) {
-    display.setCursor(4, 50);
+    display.setCursor(4, 45);
     display.print(F("BPM: "));
     display.print(bpm);
   }
@@ -715,11 +705,11 @@ void displaySettingsMode() {
   display.setTextSize(1);
   
   display.setCursor(4, 15);
-  display.print(F("Canal: "));
+  display.print(F("Canal MIDI: "));
   display.println(midiChannel + 1);
   
   display.setCursor(4, 25);
-  display.print(F("Vel: "));
+  display.print(F("Velocity: "));
   display.println(currentVelocity);
   
   display.setCursor(4, 35);
@@ -728,10 +718,7 @@ void displaySettingsMode() {
   display.println(currentOctaveShift);
   
   display.setCursor(4, 45);
-  display.print(F("Teclas: 54"));
-  
-  display.setCursor(4, 55);
-  display.print(F("v2.1"));
+  display.print(F("Teclas: 54 (6x9)"));
 }
 
 // Piano simplificado para ahorrar memoria
