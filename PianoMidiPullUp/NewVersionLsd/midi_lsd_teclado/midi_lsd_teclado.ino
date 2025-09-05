@@ -147,6 +147,22 @@ void setup() {
 
   // Mapeo de notas mejorado - disposición cromática
   mapNotesToKeys();
+  
+  // Diagnóstico inicial
+  Serial.println("=== DIAGNÓSTICO INICIAL ===");
+  Serial.print("NUM_ROWS: ");
+  Serial.println(NUM_ROWS);
+  Serial.print("NUM_COLS: ");
+  Serial.println(NUM_COLS);
+  Serial.print("START_NOTE: ");
+  Serial.println(START_NOTE);
+  Serial.print("Current Octave Shift: ");
+  Serial.println(currentOctaveShift);
+  Serial.print("Current Velocity: ");
+  Serial.println(currentVelocity);
+  Serial.print("MIDI Channel: ");
+  Serial.println(midiChannel);
+  Serial.println("========================");
 
   // Configurar pines
   pinMode(dataPin, OUTPUT);
@@ -225,11 +241,33 @@ void mapNotesToKeys() {
   for(int row = 0; row < NUM_ROWS; row++) {
     for(int col = 0; col < NUM_COLS; col++) {
       keyToMidiMap[row][col] = START_NOTE + (row * 12) + col;
-      if(keyToMidiMap[row][col] > 127) {
-        keyToMidiMap[row][col] = 127; // Limitar rango MIDI
+      
+      // Asegurar que el mapeo base esté en rango razonable
+      // Con octave shift de -3 a +3, necesitamos rango seguro
+      if(keyToMidiMap[row][col] > 91) { // 91 + 3*12 = 127 (máximo MIDI)
+        keyToMidiMap[row][col] = 91; // Limitar para permitir octave shift
+      }
+      if(keyToMidiMap[row][col] < 36) { // 36 - 3*12 = 0 (mínimo MIDI)
+        keyToMidiMap[row][col] = 36; // Limitar para permitir octave shift
       }
     }
   }
+  
+  // Debug: Mostrar mapeo completo en Serial
+  Serial.println("=== MAPEO DE TECLAS ===");
+  for(int row = 0; row < NUM_ROWS; row++) {
+    Serial.print("Fila ");
+    Serial.print(row);
+    Serial.print(": ");
+    for(int col = 0; col < NUM_COLS; col++) {
+      Serial.print(keyToMidiMap[row][col]);
+      Serial.print(" ");
+    }
+    Serial.println();
+  }
+  Serial.print("Octave Shift actual: ");
+  Serial.println(currentOctaveShift);
+  Serial.println("====================");
 }
 
 void showSplashScreen() {
@@ -568,7 +606,7 @@ void displayPerformanceMode(bool anyKeyPressed) {
 void displayDebugMode() {
   display.setTextSize(1);
   display.setCursor(4, 15);
-  display.println(F("DEBUG BOTONES:"));
+  display.println(F("DEBUG SISTEMA:"));
   
   // Estado de todos los botones en tiempo real
   display.setCursor(4, 25);
@@ -580,12 +618,13 @@ void displayDebugMode() {
   display.setCursor(4, 35);
   display.print(F("MODE: "));
   display.print(!digitalRead(modeButtonPin) ? F("ON ") : F("OFF"));
-  display.print(F(" | Notas: "));
-  display.print(noteCount);
+  display.print(F(" Oct: "));
+  display.print(currentOctaveShift);
   
   if(lastPlayedNote >= 0) {
+    // Mostrar información detallada de la última tecla presionada
     display.setCursor(4, 45);
-    display.print(F("Ultima: "));
+    display.print(F("MIDI: "));
     display.print(lastPlayedNote);
     
     // Simplificar nombre de nota para que quepa
@@ -594,6 +633,13 @@ void displayDebugMode() {
     strcpy_P(noteName, (char*)pgm_read_word(&(noteNames[noteIndex])));
     display.print(F(" "));
     display.print(noteName);
+    
+    // Mostrar canal en la misma línea
+    display.print(F(" Ch"));
+    display.print(midiChannel + 1);
+  } else {
+    display.setCursor(4, 45);
+    display.print(F("Presiona una tecla..."));
   }
 }
 
@@ -905,8 +951,32 @@ void scanColumn(int colNum) {
 }
 
 void noteOn(int row, int col) {
+  // Verificar que row y col están en rango válido
+  if(row < 0 || row >= NUM_ROWS || col < 0 || col >= NUM_COLS) {
+    Serial.print("ERROR: Row/Col fuera de rango: ");
+    Serial.print(row);
+    Serial.print(",");
+    Serial.println(col);
+    return;
+  }
+  
   int midiNote = keyToMidiMap[row][col] + currentOctaveShift * 12;
-  midiNote = constrain(midiNote, 0, 127);
+  
+  // Verificar rango MIDI válido ANTES de constrain
+  if(midiNote < 0 || midiNote > 127) {
+    Serial.print("WARN: Nota fuera de rango MIDI: ");
+    Serial.print(midiNote);
+    Serial.print(" (Row:");
+    Serial.print(row);
+    Serial.print(" Col:");
+    Serial.print(col);
+    Serial.print(" Base:");
+    Serial.print(keyToMidiMap[row][col]);
+    Serial.print(" Octave:");
+    Serial.print(currentOctaveShift);
+    Serial.println(")");
+    return; // No tocar notas fuera de rango
+  }
   
   // Debug MIDI - temporalmente mostrar en pantalla
   lastPlayedNote = midiNote; // Para mostrar en debug
@@ -919,23 +989,62 @@ void noteOn(int row, int col) {
     recordedCount++;
   }
   
+  // Verificar que velocity está en rango válido
+  byte safeVelocity = constrain(currentVelocity, 1, 127);
+  
   // Usar velocity variable
-  midiEventPacket_t noteOn = {0x09, (uint8_t)(0x90 | midiChannel), (uint8_t)midiNote, currentVelocity};
+  midiEventPacket_t noteOn = {0x09, (uint8_t)(0x90 | midiChannel), (uint8_t)midiNote, safeVelocity};
   MidiUSB.sendMIDI(noteOn);
   MidiUSB.flush();
   
-  // Debug serial
+  // Debug serial mejorado
   Serial.print("NoteON: ");
   Serial.print(midiNote);
+  Serial.print(" Row:");
+  Serial.print(row);
+  Serial.print(" Col:");
+  Serial.print(col);
   Serial.print(" Ch:");
   Serial.print(midiChannel);
   Serial.print(" Vel:");
-  Serial.println(currentVelocity);
+  Serial.print(safeVelocity);
+  Serial.print(" Base:");
+  Serial.print(keyToMidiMap[row][col]);
+  Serial.print(" OctShift:");
+  Serial.println(currentOctaveShift);
+  
+  // Test adicional: verificar que la nota está realmente enviándose
+  if(midiNote != lastPlayedNote) {
+    Serial.print("WARNING: Discrepancia en lastPlayedNote! Calculado:");
+    Serial.print(midiNote);
+    Serial.print(" Almacenado:");
+    Serial.println(lastPlayedNote);
+  }
 }
 
 void noteOff(int row, int col) {
+  // Verificar que row y col están en rango válido
+  if(row < 0 || row >= NUM_ROWS || col < 0 || col >= NUM_COLS) {
+    Serial.print("ERROR: Row/Col fuera de rango en noteOff: ");
+    Serial.print(row);
+    Serial.print(",");
+    Serial.println(col);
+    return;
+  }
+  
   int midiNote = keyToMidiMap[row][col] + currentOctaveShift * 12;
-  midiNote = constrain(midiNote, 0, 127);
+  
+  // Verificar rango MIDI válido
+  if(midiNote < 0 || midiNote > 127) {
+    Serial.print("WARN: NoteOff fuera de rango MIDI: ");
+    Serial.print(midiNote);
+    Serial.print(" (Row:");
+    Serial.print(row);
+    Serial.print(" Col:");
+    Serial.print(col);
+    Serial.println(")");
+    return; // No procesar notas fuera de rango
+  }
   
   // Grabación de notas
   if(isRecording && recordedCount < MAX_RECORDED_NOTES) {
@@ -949,9 +1058,13 @@ void noteOff(int row, int col) {
   MidiUSB.sendMIDI(noteOff);
   MidiUSB.flush();
   
-  // Debug serial
+  // Debug serial mejorado
   Serial.print("NoteOFF: ");
   Serial.print(midiNote);
+  Serial.print(" Row:");
+  Serial.print(row);
+  Serial.print(" Col:");
+  Serial.print(col);
   Serial.print(" Ch:");
   Serial.println(midiChannel);
 }
