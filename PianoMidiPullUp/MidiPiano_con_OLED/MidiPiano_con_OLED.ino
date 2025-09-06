@@ -220,11 +220,8 @@ void noteOn(int row, int col)
   if(midiNote < 0) midiNote = 0;
   if(midiNote > 127) midiNote = 127;
   
-  Serial.write(NOTE_ON_CMD);
-  Serial.write(midiNote);
-  Serial.write(NOTE_VELOCITY);
+  // Enviar MIDI USB
   noteOnMIDI(0, midiNote, NOTE_VELOCITY);
-  MidiUSB.flush();
   
   // Actualizar variables para la pantalla
   lastPlayedNote = midiNote;
@@ -241,18 +238,20 @@ void noteOff(int row, int col)
   if(midiNote < 0) midiNote = 0;
   if(midiNote > 127) midiNote = 127;
   
+  // Enviar MIDI USB
   noteOffMIDI(0, midiNote, NOTE_VELOCITY);
-  MidiUSB.flush();
 }
 
 void noteOnMIDI(byte channel, byte pitch, byte velocity) {
   midiEventPacket_t noteOn = {0x09, 0x90 | channel, pitch, velocity};
   MidiUSB.sendMIDI(noteOn);
+  MidiUSB.flush();
 }
 
 void noteOffMIDI(byte channel, byte pitch, byte velocity) {
   midiEventPacket_t noteOff = {0x08, 0x80 | channel, pitch, velocity};
   MidiUSB.sendMIDI(noteOff);
+  MidiUSB.flush();
 }
 
 void controlChange(byte channel, byte control, byte value) {
