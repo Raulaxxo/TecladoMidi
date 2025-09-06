@@ -28,13 +28,16 @@ const int clockPin = 12;
 boolean keyPressed[NUM_ROWS][NUM_COLS];
 uint8_t keyToMidiMap[NUM_ROWS][NUM_COLS];
 
-// bitmasks for scanning columns - se generan automáticamente
+// bitmasks for scanning columns - PullUp version (se generan automáticamente)
 int bits[NUM_COLS];
 
-// Función para generar bitmasks automáticamente
+// Función para generar bitmasks automáticamente para PullUp
 void generateBitmasks() {
   for(int i = 0; i < NUM_COLS && i < 8; i++) {
-    bits[i] = 1 << i; // B00000001, B00000010, B00000100, etc.
+    bits[i] = ~(1 << i); // B11111110, B11111101, B11111011, etc. (invertidos para PullUp)
+  }
+  if(NUM_COLS <= 8) {
+    bits[NUM_COLS] = B11111111; // Estado inactivo para columnas no usadas
   }
   // Si tienes más de 8 columnas, necesitarás lógica adicional para múltiples shift registers
 }
@@ -43,7 +46,7 @@ void setup()
 {
   Serial.begin(SERIAL_RATE);
   
-  // Generar bitmasks automáticamente según configuración
+  // Generar bitmasks automáticamente según configuración PullUp
   generateBitmasks();
   
   // Inicializar mapeo de notas MIDI automáticamente
@@ -60,16 +63,16 @@ void setup()
   }
 
   // setup pins output/input mode
-  pinMode(dataPin,  OUTPUT);
+  pinMode(dataPin, OUTPUT);
   pinMode(clockPin, OUTPUT);
   pinMode(latchPin, OUTPUT);
 
-  // Configurar pines de filas automáticamente
+  // Configurar pines de filas automáticamente con pull-up
   for(int i = 0; i < NUM_ROWS; i++) {
-    pinMode(rowPins[i], INPUT);
+    pinMode(rowPins[i], INPUT_PULLUP);
   }
 
-  Serial.print("Sistema iniciado - Teclado PullDown ");
+  Serial.print("Sistema iniciado - Teclado PullUp ");
   Serial.print(NUM_ROWS);
   Serial.print("x");
   Serial.print(NUM_COLS);
@@ -92,7 +95,7 @@ void loop()
     //get row values at this column - dinámico según NUM_ROWS
     int rowValue[NUM_ROWS];
     for(int i = 0; i < NUM_ROWS; i++) {
-      rowValue[i] = digitalRead(rowPins[i]);
+      rowValue[i] = !digitalRead(rowPins[i]); // Invertido para PullUp
     }
 
     // process keys pressed
@@ -121,25 +124,25 @@ void scanColumn(int colNum)
 {
   digitalWrite(latchPin, LOW);
 
-  // Soporte para hasta 16 columnas usando 2 shift registers
+  // Soporte para hasta 16 columnas usando 2 shift registers - PullUp version
   if(NUM_COLS <= 8) {
     // Configuración simple: un solo shift register
     if(colNum < NUM_COLS) {
       shiftOut(dataPin, clockPin, MSBFIRST, bits[colNum]);
     } else {
-      shiftOut(dataPin, clockPin, MSBFIRST, B00000000);
+      shiftOut(dataPin, clockPin, MSBFIRST, B11111111); // Estado inactivo para PullUp
     }
   } else {
     // Configuración dual: dos shift registers
     if(0 <= colNum && colNum <= 7)
     {
-      shiftOut(dataPin, clockPin, MSBFIRST, B00000000); //right sr
+      shiftOut(dataPin, clockPin, MSBFIRST, B11111111); //right sr - inactivo
       shiftOut(dataPin, clockPin, MSBFIRST, bits[colNum]); //left sr
     }
     else if(colNum < NUM_COLS)
     {
       shiftOut(dataPin, clockPin, MSBFIRST, bits[colNum-8]); //right sr
-      shiftOut(dataPin, clockPin, MSBFIRST, B00000000); //left sr
+      shiftOut(dataPin, clockPin, MSBFIRST, B11111111); //left sr - inactivo
     }
   }
   
@@ -161,17 +164,22 @@ void noteOff(int row, int col)
 void noteOnMIDI(byte channel, byte pitch, byte velocity) {
   midiEventPacket_t noteOn = {0x09, 0x90 | channel, pitch, velocity};
   MidiUSB.sendMIDI(noteOn);
+  
 }
 
 void noteOffMIDI(byte channel, byte pitch, byte velocity) {
   midiEventPacket_t noteOff = {0x08, 0x80 | channel, pitch, velocity};
   MidiUSB.sendMIDI(noteOff);
+ 
+  
+  
 }
 
 void controlChange(byte channel, byte control, byte value) {
   midiEventPacket_t event = {0x0B, 0xB0 | channel, control, value};
   MidiUSB.sendMIDI(event);
 }
+
 
 
 

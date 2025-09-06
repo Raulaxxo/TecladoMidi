@@ -3,8 +3,37 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
+// ===== CONFIGURACIÓN DEL TECLADO =====
+// Modifica estos valores según tu teclado
 #define NUM_ROWS 6
 #define NUM_COLS 9
+
+// Configuración de notas MIDI
+#define FIRST_MIDI_NOTE 31    // Primera nota MIDI del teclado (nota más grave)
+#define OCTAVE_RANGE_LOW -2   // Octavas hacia abajo permitidas
+#define OCTAVE_RANGE_HIGH 1   // Octavas hacia arriba permitidas
+
+// Pin Definitions - MODIFICA SEGÚN TU HARDWARE
+// Row input pins (conecta tus filas a estos pines consecutivos)
+#define FIRST_ROW_PIN 4       // Primer pin de fila (las demás serán consecutivas)
+const int rowPins[NUM_ROWS] = {4, 5, 6, 7, 8, 9}; // Pines de filas
+
+// 74HC595 pins para shift register
+const int dataPin = 10;
+const int latchPin = 11;
+const int clockPin = 12;
+
+// Botones de control
+const int btn1Pin = 13;  // Botón 1
+const int btn2Pin = A5;  // Botón 2  
+const int btn3Pin = A1;  // Botón 3
+
+// Buzzer para metrónomo
+const int buzzerPin = A4;  // Buzzer en A4
+
+// ===== CONFIGURACIÓN AVANZADA =====
+// Bitmasks para scanning - se generan automáticamente según NUM_COLS
+// No modificar a menos que sepas lo que haces
 
 #define NOTE_ON_CMD 0x90
 #define NOTE_OFF_CMD 0x80
@@ -19,26 +48,13 @@
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
 // Pin Definitions
-// Row input pins (teclado conectado de pin 3 al 9)
-const int row1Pin = 4;
-const int row2Pin = 5;
-const int row3Pin = 6;
-const int row4Pin = 7;
-const int row5Pin = 8;
-const int row6Pin = 9;
-
-// 74HC595 pins (data pin al clock pin: 10, 11, 12)
-const int dataPin = 10;
-const int latchPin = 11;
-const int clockPin = 12;
-
-// Botones
-const int btn1Pin = 13;  // Botón 1
-const int btn2Pin = A5;  // Botón 2  
-const int btn3Pin = A1;  // Botón 3
-
-// Buzzer para metrónomo
-const int buzzerPin = A4;  // Buzzer en A4
+// Row input pins (teclado conectado de pin 4 al 9)
+const int row1Pin = rowPins[0];
+const int row2Pin = rowPins[1];
+const int row3Pin = rowPins[2];
+const int row4Pin = rowPins[3];
+const int row5Pin = rowPins[4];
+const int row6Pin = rowPins[5];
 
 boolean keyPressed[NUM_ROWS][NUM_COLS];
 uint8_t keyToMidiMap[NUM_ROWS][NUM_COLS];
@@ -51,7 +67,7 @@ unsigned long lastDisplayUpdate = 0;
 unsigned long noteDisplayTime = 0; // Para mantener la nota visible por un tiempo
 
 // Variables para botones
-int currentOctave = 0;  // Octava actual (-2 a +1)
+int currentOctave = 0;  // Octava actual (OCTAVE_RANGE_LOW a OCTAVE_RANGE_HIGH)
 int currentMode = 0;    // Modo actual (0=Piano, 1=Metrónomo)
 unsigned long lastButtonPress[3] = {0, 0, 0}; // Debounce para los 3 botones
 #define BUTTON_DEBOUNCE 300
@@ -64,23 +80,24 @@ bool beatOn = false;
 #define MIN_BPM 60
 #define MAX_BPM 200
 
-// bitmasks for scanning columns
-int bits[] =
-{ 
-  B11111110,
-  B11111101,
-  B11111011,
-  B11110111,
-  B11101111,
-  B11011111,
-  B10111111,
-  B01111111,
-  B11111111
-};
+// bitmasks for scanning columns - PULLDOWN VERSION
+// Se generan automáticamente según NUM_COLS
+int bits[NUM_COLS];
+
+// Función para generar bitmasks automáticamente
+void generateBitmasks() {
+  for(int i = 0; i < NUM_COLS && i < 8; i++) {
+    bits[i] = 1 << i; // B00000001, B00000010, B00000100, etc.
+  }
+  // Si tienes más de 8 columnas, necesitarás lógica adicional para múltiples shift registers
+}
 
 void setup()
 {
   Serial.begin(SERIAL_RATE);
+  
+  // Generar bitmasks automáticamente según configuración
+  generateBitmasks();
   
   // Inicializar OLED
   Wire.begin();
@@ -98,14 +115,20 @@ void setup()
     display.println("MIDI");
     display.setCursor(15, 35);
     display.println("PIANO");
+    display.setTextSize(1);
+    display.setCursor(5, 55);
+    display.print("PullDown ");
+    display.print(NUM_ROWS);
+    display.print("x");
+    display.print(NUM_COLS);
     display.display();
     delay(2000);
   } else {
-    oledWorking = false;
-    Serial.println("Error inicializando OLED");
+    Serial.println("Error al inicializar OLED");
   }
 
-  int note = 31;
+  // Inicializar mapeo de notas MIDI automáticamente
+  int note = FIRST_MIDI_NOTE;
 
   for(int colCtr = 0; colCtr < NUM_COLS; ++colCtr)
   {
@@ -118,46 +141,47 @@ void setup()
   }
 
   // setup pins output/input mode
-  pinMode(dataPin, OUTPUT);
+  pinMode(dataPin,  OUTPUT);
   pinMode(clockPin, OUTPUT);
   pinMode(latchPin, OUTPUT);
 
-  pinMode(row1Pin, INPUT_PULLUP);
-  pinMode(row2Pin, INPUT_PULLUP);
-  pinMode(row3Pin, INPUT_PULLUP);
-  pinMode(row4Pin, INPUT_PULLUP);
-  pinMode(row5Pin, INPUT_PULLUP);
-  pinMode(row6Pin, INPUT_PULLUP);
-  
-  // Configurar botones
+  // Configurar pines de filas automáticamente
+  for(int i = 0; i < NUM_ROWS; i++) {
+    pinMode(rowPins[i], INPUT);
+  }
+
+  // Configurar botones con pull-up interno
   pinMode(btn1Pin, INPUT_PULLUP);
   pinMode(btn2Pin, INPUT_PULLUP);
   pinMode(btn3Pin, INPUT_PULLUP);
   
   // Configurar buzzer
   pinMode(buzzerPin, OUTPUT);
-  digitalWrite(buzzerPin, LOW);
   
-  Serial.println("Sistema MIDI con OLED listo!");
+  Serial.print("Sistema iniciado - Modo Piano - Teclado ");
+  Serial.print(NUM_ROWS);
+  Serial.print("x");
+  Serial.print(NUM_COLS);
+  Serial.print(" (");
+  Serial.print(NUM_ROWS * NUM_COLS);
+  Serial.println(" teclas)");
 }
 
 void loop()
 {
+  // Escanear matriz de teclas
   for (int colCtr = 0; colCtr < NUM_COLS; ++colCtr)
   {
     //scan next column
     scanColumn(colCtr);
 
-    //get row values at this column
+    //get row values at this column - dinámico según NUM_ROWS
     int rowValue[NUM_ROWS];
-    rowValue[0] = !digitalRead(row1Pin);
-    rowValue[1] = !digitalRead(row2Pin);
-    rowValue[2] = !digitalRead(row3Pin);
-    rowValue[3] = !digitalRead(row4Pin);
-    rowValue[4] = !digitalRead(row5Pin);
-    rowValue[5] = !digitalRead(row6Pin);
+    for(int i = 0; i < NUM_ROWS; i++) {
+      rowValue[i] = digitalRead(rowPins[i]);
+    }
 
-    // process keys pressed
+    // process keys pressed - PULLDOWN: HIGH = pressed
     for(int rowCtr=0; rowCtr<NUM_ROWS; ++rowCtr)
     {
       if(rowValue[rowCtr] != 0 && !keyPressed[rowCtr][colCtr])
@@ -167,7 +191,7 @@ void loop()
       }
     }
 
-    // process keys released
+    // process keys released - PULLDOWN: LOW = released
     for(int rowCtr=0; rowCtr<NUM_ROWS; ++rowCtr)
     {
       if(rowValue[rowCtr] == 0 && keyPressed[rowCtr][colCtr])
@@ -182,15 +206,12 @@ void loop()
   handleButtons();
   
   // Actualizar metrónomo si está activo
-  if(metronomeActive) {
-    updateMetronome();
-  }
+  updateMetronome();
   
-  // Actualizar pantalla cada 500ms
-  unsigned long now = millis();
-  if(oledWorking && (now - lastDisplayUpdate > 500)) {
-    lastDisplayUpdate = now;
+  // Actualizar pantalla cada 50ms
+  if(millis() - lastDisplayUpdate > 50) {
     updateDisplay();
+    lastDisplayUpdate = millis();
   }
 }
 
@@ -198,16 +219,28 @@ void scanColumn(int colNum)
 {
   digitalWrite(latchPin, LOW);
 
-  if(0 <= colNum && colNum <= 9)
-  {
-    shiftOut(dataPin, clockPin, MSBFIRST, B11111111); //right sr
-    shiftOut(dataPin, clockPin, MSBFIRST, bits[colNum]); //left sr
+  // Soporte para hasta 16 columnas usando 2 shift registers
+  if(NUM_COLS <= 8) {
+    // Configuración simple: un solo shift register
+    if(colNum < NUM_COLS) {
+      shiftOut(dataPin, clockPin, MSBFIRST, bits[colNum]);
+    } else {
+      shiftOut(dataPin, clockPin, MSBFIRST, B00000000);
+    }
+  } else {
+    // Configuración dual: dos shift registers
+    if(0 <= colNum && colNum <= 7)
+    {
+      shiftOut(dataPin, clockPin, MSBFIRST, B00000000); //right sr
+      shiftOut(dataPin, clockPin, MSBFIRST, bits[colNum]); //left sr
+    }
+    else if(colNum < NUM_COLS)
+    {
+      shiftOut(dataPin, clockPin, MSBFIRST, bits[colNum-8]); //right sr
+      shiftOut(dataPin, clockPin, MSBFIRST, B00000000); //left sr
+    }
   }
-  else
-  {
-    shiftOut(dataPin, clockPin, MSBFIRST, bits[colNum-8]); //right sr
-    shiftOut(dataPin, clockPin, MSBFIRST, B11111111); //left sr
-  }
+  
   digitalWrite(latchPin, HIGH);
 }
 
@@ -267,7 +300,7 @@ void handleButtons() {
     if(!digitalRead(btn1Pin) && (now - lastButtonPress[0] > BUTTON_DEBOUNCE)) {
       lastButtonPress[0] = now;
       currentOctave++;
-      if(currentOctave > 1) currentOctave = 1; // Límite +1 octava
+      if(currentOctave > OCTAVE_RANGE_HIGH) currentOctave = OCTAVE_RANGE_HIGH; // Límite configurable
       Serial.print("Octava: ");
       Serial.println(currentOctave);
     }
@@ -276,7 +309,7 @@ void handleButtons() {
     if(!digitalRead(btn2Pin) && (now - lastButtonPress[1] > BUTTON_DEBOUNCE)) {
       lastButtonPress[1] = now;
       currentOctave--;
-      if(currentOctave < -2) currentOctave = -2; // Límite -2 octavas
+      if(currentOctave < OCTAVE_RANGE_LOW) currentOctave = OCTAVE_RANGE_LOW; // Límite configurable
       Serial.print("Octava: ");
       Serial.println(currentOctave);
     }
