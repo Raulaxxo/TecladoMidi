@@ -37,6 +37,9 @@ const int btn1Pin = 13;  // Botón 1
 const int btn2Pin = A5;  // Botón 2  
 const int btn3Pin = A1;  // Botón 3
 
+// Buzzer para metrónomo
+const int buzzerPin = A4;  // Buzzer en A4
+
 boolean keyPressed[NUM_ROWS][NUM_COLS];
 uint8_t keyToMidiMap[NUM_ROWS][NUM_COLS];
 
@@ -49,24 +52,17 @@ unsigned long noteDisplayTime = 0; // Para mantener la nota visible por un tiemp
 
 // Variables para botones
 int currentOctave = 0;  // Octava actual (-2 a +2)
-int currentMode = 0;    // Modo actual (0=Piano, 1=Grabar/Reproducir)
+int currentMode = 0;    // Modo actual (0=Piano, 1=Metrónomo)
 unsigned long lastButtonPress[3] = {0, 0, 0}; // Debounce para los 3 botones
 #define BUTTON_DEBOUNCE 300
 
-// Variables para grabación y reproducción
-#define MAX_RECORDED_NOTES 100
-struct RecordedNote {
-  uint8_t note;
-  unsigned long timestamp;
-  bool isNoteOn;
-};
-RecordedNote recordedSequence[MAX_RECORDED_NOTES];
-int recordedCount = 0;
-bool isRecording = false;
-bool isPlaying = false;
-unsigned long recordStartTime = 0;
-unsigned long playStartTime = 0;
-int currentPlayIndex = 0;
+// Variables para metrónomo
+int metronomeBPM = 120;  // BPM por defecto
+bool metronomeActive = false;
+unsigned long lastBeatTime = 0;
+bool beatOn = false;
+#define MIN_BPM 60
+#define MAX_BPM 200
 
 // bitmasks for scanning columns
 int bits[] =
@@ -138,6 +134,10 @@ void setup()
   pinMode(btn2Pin, INPUT_PULLUP);
   pinMode(btn3Pin, INPUT_PULLUP);
   
+  // Configurar buzzer
+  pinMode(buzzerPin, OUTPUT);
+  digitalWrite(buzzerPin, LOW);
+  
   Serial.println("Sistema MIDI con OLED listo!");
 }
 
@@ -181,8 +181,10 @@ void loop()
   // Manejar botones
   handleButtons();
   
-  // Actualizar reproducción si está activa
-  updatePlayback();
+  // Actualizar metrónomo si está activo
+  if(metronomeActive) {
+    updateMetronome();
+  }
   
   // Actualizar pantalla cada 500ms
   unsigned long now = millis();
@@ -228,11 +230,6 @@ void noteOn(int row, int col)
   lastPlayedNote = midiNote;
   noteDisplayTime = millis(); // Marcar cuando se tocó la nota
   notesPlayedCount++;
-  
-  // Grabar nota si está en modo grabación
-  if(isRecording) {
-    recordNote(midiNote, true);
-  }
 }
 
 void noteOff(int row, int col)
@@ -246,11 +243,6 @@ void noteOff(int row, int col)
   
   noteOffMIDI(0, midiNote, NOTE_VELOCITY);
   MidiUSB.flush();
-  
-  // Grabar nota si está en modo grabación
-  if(isRecording) {
-    recordNote(midiNote, false);
-  }
 }
 
 void noteOnMIDI(byte channel, byte pitch, byte velocity) {
@@ -289,40 +281,43 @@ void handleButtons() {
       Serial.print("Octava: ");
       Serial.println(currentOctave);
     }
-  } else if(currentMode == 1) { // Modo Grabación - Control de grabación/reproducción
-    // Botón 1 (Pin 13) - Iniciar/Parar grabación
+  } else if(currentMode == 1) { // Modo Metrónomo - Control de BPM y activación
+    // Botón 1 (Pin 13) - Subir BPM
     if(!digitalRead(btn1Pin) && (now - lastButtonPress[0] > BUTTON_DEBOUNCE)) {
       lastButtonPress[0] = now;
-      if(!isRecording && !isPlaying) {
-        startRecording();
-      } else if(isRecording) {
-        stopRecording();
-      }
+      metronomeBPM += 5;
+      if(metronomeBPM > MAX_BPM) metronomeBPM = MAX_BPM;
+      Serial.print("BPM: ");
+      Serial.println(metronomeBPM);
     }
     
-    // Botón 2 (Pin A5) - Reproducir secuencia grabada
+    // Botón 2 (Pin A5) - Bajar BPM
     if(!digitalRead(btn2Pin) && (now - lastButtonPress[1] > BUTTON_DEBOUNCE)) {
       lastButtonPress[1] = now;
-      if(!isRecording && !isPlaying && recordedCount > 0) {
-        startPlayback();
-      } else if(isPlaying) {
-        stopPlayback();
-      }
+      metronomeBPM -= 5;
+      if(metronomeBPM < MIN_BPM) metronomeBPM = MIN_BPM;
+      Serial.print("BPM: ");
+      Serial.println(metronomeBPM);
     }
     
-    // Botón 3 en modo grabación - Borrar todo (mantener presionado más tiempo)
-    if(!digitalRead(btn3Pin) && (now - lastButtonPress[2] > BUTTON_DEBOUNCE * 5)) {
-      clearRecording();
+    // Botón 3 en modo metrónomo - Activar/Desactivar metrónomo (presión larga)
+    if(!digitalRead(btn3Pin) && (now - lastButtonPress[2] > BUTTON_DEBOUNCE * 2)) {
+      metronomeActive = !metronomeActive;
+      lastBeatTime = millis(); // Reiniciar timing
+      beatOn = false;
+      noTone(buzzerPin);
       lastButtonPress[2] = now;
+      Serial.print("Metrónomo: ");
+      Serial.println(metronomeActive ? "ACTIVO" : "INACTIVO");
       return; // Salir temprano para no cambiar de modo
     }
   }
   
   // Botón 3 (Pin A1) - Cambiar modo de display (presión corta)
   if(!digitalRead(btn3Pin) && (now - lastButtonPress[2] > BUTTON_DEBOUNCE)) {
-    // Solo cambiar modo si no está en modo grabación con presión larga
-    if(currentMode == 1) {
-      // En modo grabación, presión corta no hace nada (debe ser larga para borrar)
+    // Solo cambiar modo si no está en modo metrónomo activo
+    if(currentMode == 1 && metronomeActive) {
+      // En modo metrónomo activo, presión corta no hace nada
       return;
     }
     
@@ -348,37 +343,42 @@ void updateDisplay() {
       drawPianoKeyboard();
       break;
       
-    case 1: // Modo Grabar/Reproducir
+    case 1: // Modo Metrónomo
       display.setTextSize(1);
       display.setTextColor(SSD1306_WHITE);
       display.setCursor(3, 3);
-      display.println("MODO: GRABACION");
-      display.drawLine(3, 13, 124, 13, SSD1306_WHITE);
+      display.print("METRONOMO");
+      display.drawLine(3, 13, 100, 13, SSD1306_WHITE);
       
-      display.setCursor(3, 18);
-      if(isRecording) {
-        display.print("GRABANDO... ");
-        display.print(recordedCount);
-        display.print("/");
-        display.print(MAX_RECORDED_NOTES);
-      } else if(isPlaying) {
-        display.print("REPRODUCIENDO...");
-      } else {
-        display.print("LISTO PARA GRABAR");
+      // Mostrar BPM grande
+      display.setTextSize(2);
+      display.setCursor(30, 18);
+      display.print(metronomeBPM);
+      
+      display.setTextSize(1);
+      display.setCursor(75, 25);
+      display.print("BPM");
+      
+      // Estado del metrónomo
+      display.setCursor(3, 38);
+      display.print(metronomeActive ? "ON " : "OFF");
+      
+      // Indicador visual de beat
+      if(metronomeActive && beatOn) {
+        display.fillRect(90, 38, 8, 8, SSD1306_WHITE);
+      } else if(metronomeActive) {
+        display.drawRect(90, 38, 8, 8, SSD1306_WHITE);
       }
       
-      display.setCursor(3, 28);
-      display.print("Notas grabadas: ");
-      display.println(recordedCount);
-      
-      display.setCursor(3, 38);
-      display.print("Btn1: Grabar");
-      
-      display.setCursor(3, 48);
-      display.print("Btn2: Reproducir");
+      // Mostrar última nota tocada
+      if(lastPlayedNote >= 0 && (millis() - noteDisplayTime < 2000)) {
+        display.setCursor(3, 48);
+        display.print("Nota:");
+        display.print(getNoteNameLatin(lastPlayedNote));
+      }
       
       display.setCursor(3, 58);
-      display.print("Btn3: Borrar todo");
+      display.print("1/2:BPM 3:ON/OFF");
       break;
   }
   
@@ -474,87 +474,36 @@ String getNoteNameLatin(int noteNumber) {
   return String(noteNamesLatin[noteNumber % 12]) + String(octave);
 }
 
-// Funciones de grabación y reproducción
-void startRecording() {
-  recordedCount = 0;
-  isRecording = true;
-  isPlaying = false;
-  recordStartTime = millis();
-  Serial.println("Iniciando grabación...");
-}
-
-void stopRecording() {
-  isRecording = false;
-  Serial.print("Grabación finalizada. Notas grabadas: ");
-  Serial.println(recordedCount);
-}
-
-void clearRecording() {
-  recordedCount = 0;
-  isRecording = false;
-  isPlaying = false;
-  Serial.println("Grabación borrada");
-}
-
-void startPlayback() {
-  if(recordedCount == 0) return;
-  
-  isPlaying = true;
-  isRecording = false;
-  playStartTime = millis();
-  currentPlayIndex = 0;
-  Serial.println("Iniciando reproducción...");
-}
-
-void stopPlayback() {
-  isPlaying = false;
-  currentPlayIndex = 0;
-  Serial.println("Reproducción detenida");
-}
-
-void recordNote(uint8_t note, bool isNoteOn) {
-  if(!isRecording || recordedCount >= MAX_RECORDED_NOTES) return;
-  
-  recordedSequence[recordedCount].note = note;
-  recordedSequence[recordedCount].timestamp = millis() - recordStartTime;
-  recordedSequence[recordedCount].isNoteOn = isNoteOn;
-  recordedCount++;
-  
-  Serial.print("Nota grabada: ");
-  Serial.print(note);
-  Serial.print(isNoteOn ? " ON" : " OFF");
-  Serial.print(" en tiempo: ");
-  Serial.println(recordedSequence[recordedCount-1].timestamp);
-}
-
-void updatePlayback() {
-  if(!isPlaying || currentPlayIndex >= recordedCount) {
-    if(isPlaying && currentPlayIndex >= recordedCount) {
-      stopPlayback();
+// Función del metrónomo
+void updateMetronome() {
+  if(!metronomeActive) {
+    if(beatOn) {
+      noTone(buzzerPin);
+      beatOn = false;
     }
     return;
   }
   
-  unsigned long currentTime = millis() - playStartTime;
+  unsigned long currentTime = millis();
+  unsigned long beatInterval = 60000 / metronomeBPM; // Intervalo en milisegundos
   
-  while(currentPlayIndex < recordedCount && 
-        currentTime >= recordedSequence[currentPlayIndex].timestamp) {
+  // Tiempo del beat (sonido corto)
+  const unsigned long beatDuration = 30; // 30ms de duración del beep
+  
+  if(currentTime - lastBeatTime >= beatInterval) {
+    // Nuevo beat
+    lastBeatTime = currentTime;
+    beatOn = true;
     
-    uint8_t note = recordedSequence[currentPlayIndex].note;
-    bool isNoteOn = recordedSequence[currentPlayIndex].isNoteOn;
+    // Generar tono en el buzzer
+    tone(buzzerPin, 800, beatDuration); // 800Hz por 30ms
     
-    if(isNoteOn) {
-      noteOn(0, note, NOTE_VELOCITY);
-      Serial.print("Reproduciendo: ");
-      Serial.print(note);
-      Serial.println(" ON");
-    } else {
-      noteOff(0, note, NOTE_VELOCITY);
-      Serial.print("Reproduciendo: ");
-      Serial.print(note);
-      Serial.println(" OFF");
-    }
-    
-    currentPlayIndex++;
+    Serial.print("Beat! BPM: ");
+    Serial.println(metronomeBPM);
+  }
+  
+  // Apagar indicador visual después de un tiempo corto
+  if(beatOn && (currentTime - lastBeatTime) > beatDuration) {
+    beatOn = false;
   }
 }
