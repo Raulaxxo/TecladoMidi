@@ -20,12 +20,12 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
 // Pin Definitions
 // Row input pins (teclado conectado de pin 3 al 9)
-const int row1Pin = 3;
-const int row2Pin = 4;
-const int row3Pin = 5;
-const int row4Pin = 6;
-const int row5Pin = 7;
-const int row6Pin = 8;
+const int row1Pin = 4;
+const int row2Pin = 5;
+const int row3Pin = 6;
+const int row4Pin = 7;
+const int row5Pin = 8;
+const int row6Pin = 9;
 
 // 74HC595 pins (data pin al clock pin: 10, 11, 12)
 const int dataPin = 10;
@@ -45,12 +45,28 @@ bool oledWorking = false;
 int lastPlayedNote = -1;
 int notesPlayedCount = 0;
 unsigned long lastDisplayUpdate = 0;
+unsigned long noteDisplayTime = 0; // Para mantener la nota visible por un tiempo
 
 // Variables para botones
 int currentOctave = 0;  // Octava actual (-2 a +2)
-int currentMode = 0;    // Modo actual (0=Piano, 1=Info, 2=Config)
+int currentMode = 0;    // Modo actual (0=Piano, 1=Info, 2=Grabar/Reproducir)
 unsigned long lastButtonPress[3] = {0, 0, 0}; // Debounce para los 3 botones
 #define BUTTON_DEBOUNCE 300
+
+// Variables para grabación y reproducción
+#define MAX_RECORDED_NOTES 100
+struct RecordedNote {
+  uint8_t note;
+  unsigned long timestamp;
+  bool isNoteOn;
+};
+RecordedNote recordedSequence[MAX_RECORDED_NOTES];
+int recordedCount = 0;
+bool isRecording = false;
+bool isPlaying = false;
+unsigned long recordStartTime = 0;
+unsigned long playStartTime = 0;
+int currentPlayIndex = 0;
 
 // bitmasks for scanning columns
 int bits[] =
@@ -207,6 +223,7 @@ void noteOn(int row, int col)
   
   // Actualizar variables para la pantalla
   lastPlayedNote = midiNote;
+  noteDisplayTime = millis(); // Marcar cuando se tocó la nota
   notesPlayedCount++;
 }
 
@@ -274,83 +291,156 @@ void updateDisplay() {
   
   display.clearDisplay();
   
-  // Título
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  display.println("MIDI PIANO LEONARDO");
-  
-  // Línea separadora
-  display.drawLine(0, 10, 127, 10, SSD1306_WHITE);
+  // Dibujar borde para todos los modos
+  display.drawRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, SSD1306_WHITE);
   
   // Mostrar información según el modo
   switch(currentMode) {
-    case 0: // Modo Piano
-      display.setCursor(0, 15);
-      display.print("Modo: PIANO");
-      
-      display.setCursor(0, 25);
-      display.print("Octava: ");
-      if(currentOctave > 0) display.print("+");
-      display.println(currentOctave);
-      
-      if(lastPlayedNote >= 0) {
-        display.setCursor(0, 35);
-        display.print("Ultima: ");
-        display.print(getNoteName(lastPlayedNote));
-        display.print(" (");
-        display.print(lastPlayedNote);
-        display.println(")");
-      }
-      
-      display.setCursor(0, 50);
-      display.print("Notas: ");
-      display.println(notesPlayedCount);
+    case 0: // Modo Piano - Dibujar teclado
+      drawPianoKeyboard();
       break;
       
     case 1: // Modo Info
-      display.setCursor(0, 15);
-      display.print("Modo: INFO");
+      display.setTextSize(1);
+      display.setTextColor(SSD1306_WHITE);
+      display.setCursor(3, 3);
+      display.println("MODO: INFO");
+      display.drawLine(3, 13, 124, 13, SSD1306_WHITE);
       
-      display.setCursor(0, 25);
+      display.setCursor(3, 18);
       display.print("Tiempo: ");
       display.print(millis() / 1000);
       display.print("s");
       
-      display.setCursor(0, 35);
+      display.setCursor(3, 28);
       display.print("Total notas: ");
       display.println(notesPlayedCount);
       
-      display.setCursor(0, 45);
+      display.setCursor(3, 38);
       display.print("MIDI Canal: 1");
       
-      display.setCursor(0, 55);
+      display.setCursor(3, 48);
+      display.print("Octava: ");
+      if(currentOctave > 0) display.print("+");
+      display.println(currentOctave);
+      
+      display.setCursor(3, 58);
       display.print("Estado: ACTIVO");
       break;
       
     case 2: // Modo Config
-      display.setCursor(0, 15);
-      display.print("Modo: CONFIG");
+      display.setTextSize(1);
+      display.setTextColor(SSD1306_WHITE);
+      display.setCursor(3, 3);
+      display.println("MODO: CONFIG");
+      display.drawLine(3, 13, 124, 13, SSD1306_WHITE);
       
-      display.setCursor(0, 25);
+      display.setCursor(3, 18);
       display.print("Pines teclado: 3-8");
       
-      display.setCursor(0, 35);
+      display.setCursor(3, 28);
       display.print("Shift reg: 10-12");
       
-      display.setCursor(0, 45);
+      display.setCursor(3, 38);
       display.print("Botones: 13,A5,A1");
       
-      display.setCursor(0, 55);
+      display.setCursor(3, 48);
       display.print("OLED: SDA/SCL");
+      
+      display.setCursor(3, 58);
+      display.print("Octava: ");
+      display.println(currentOctave);
       break;
   }
   
   display.display();
 }
 
+void drawPianoKeyboard() {
+  // Título simple (el borde ya se dibuja en updateDisplay)
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(3, 3);
+  display.print("PIANO - Oct:");
+  if(currentOctave > 0) display.print("+");
+  display.print(currentOctave);
+  
+  // Mostrar nota tocada arriba del teclado
+  if(lastPlayedNote >= 0 && (millis() - noteDisplayTime < 2000)) {
+    display.setTextSize(2);
+    display.setCursor(45, 12);
+    display.println(getNoteNameLatin(lastPlayedNote));
+  }
+  
+  // Dibujar teclado (octava completa - 7 teclas blancas)
+  int keyWidth = 16;  // Ancho de cada tecla blanca (un poco más pequeño para el borde)
+  int keyHeight = 32; // Alto de las teclas (un poco más pequeño)
+  int startY = 28;    // Posición Y donde empieza el teclado (más abajo por el borde)
+  int startX = 4;     // Posición X donde empieza el teclado (más a la derecha por el borde)
+  
+  // Teclas blancas (Do, Re, Mi, Fa, Sol, La, Si)
+  for(int i = 0; i < 7; i++) {
+    int x = startX + (i * keyWidth);
+    
+    // Dibujar contorno de la tecla
+    display.drawRect(x, startY, keyWidth, keyHeight, SSD1306_WHITE);
+    
+    // Verificar si esta tecla está siendo tocada
+    bool isPressed = false;
+    if(lastPlayedNote >= 0 && (millis() - noteDisplayTime < 1000)) {
+      int noteInOctave = lastPlayedNote % 12;
+      // Mapear notas blancas: Do(0), Re(2), Mi(4), Fa(5), Sol(7), La(9), Si(11)
+      int whiteNotes[] = {0, 2, 4, 5, 7, 9, 11};
+      if(noteInOctave == whiteNotes[i]) {
+        isPressed = true;
+      }
+    }
+    
+    // Si está presionada, rellenar la tecla
+    if(isPressed) {
+      display.fillRect(x+1, startY+1, keyWidth-2, keyHeight-2, SSD1306_WHITE);
+    }
+  }
+  
+  // Dibujar teclas negras (sostenidos)
+  display.setTextColor(SSD1306_WHITE);
+  int blackKeyWidth = 10;
+  int blackKeyHeight = 20;
+  
+  // Posiciones de teclas negras ajustadas para el nuevo tamaño (Do#, Re#, Fa#, Sol#, La#)
+  int blackKeyPositions[] = {12, 28, 60, 76, 92}; // Posiciones X ajustadas para teclas más pequeñas
+  
+  for(int i = 0; i < 5; i++) {
+    bool isPressed = false;
+    if(lastPlayedNote >= 0 && (millis() - noteDisplayTime < 1000)) {
+      int noteInOctave = lastPlayedNote % 12;
+      // Mapear notas negras: Do#(1), Re#(3), Fa#(6), Sol#(8), La#(10)
+      int blackNotes[] = {1, 3, 6, 8, 10};
+      if(noteInOctave == blackNotes[i]) {
+        isPressed = true;
+      }
+    }
+    
+    if(isPressed) {
+      // Tecla negra presionada - dibujar en blanco con contorno negro
+      display.fillRect(blackKeyPositions[i], startY, blackKeyWidth, blackKeyHeight, SSD1306_WHITE);
+      display.drawRect(blackKeyPositions[i], startY, blackKeyWidth, blackKeyHeight, SSD1306_BLACK);
+    } else {
+      // Tecla negra normal - rellenar en negro con contorno blanco
+      display.fillRect(blackKeyPositions[i], startY, blackKeyWidth, blackKeyHeight, SSD1306_BLACK);
+      display.drawRect(blackKeyPositions[i], startY, blackKeyWidth, blackKeyHeight, SSD1306_WHITE);
+    }
+  }
+}
+
 String getNoteName(int noteNumber) {
   const char* noteNames[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
   int octave = (noteNumber / 12) - 1;
   return String(noteNames[noteNumber % 12]) + String(octave);
+}
+
+String getNoteNameLatin(int noteNumber) {
+  const char* noteNamesLatin[] = {"Do", "Do#", "Re", "Re#", "Mi", "Fa", "Fa#", "Sol", "Sol#", "La", "La#", "Si"};
+  int octave = (noteNumber / 12) - 1;
+  return String(noteNamesLatin[noteNumber % 12]) + String(octave);
 }
