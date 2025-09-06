@@ -280,7 +280,7 @@ void handleButtons() {
   if(!digitalRead(btn3Pin) && (now - lastButtonPress[2] > BUTTON_DEBOUNCE)) {
     lastButtonPress[2] = now;
     currentMode++;
-    if(currentMode > 2) currentMode = 0; // 3 modos: 0, 1, 2
+    if(currentMode > 1) currentMode = 0; // 2 modos: 0, 1
     Serial.print("Modo display: ");
     Serial.println(currentMode);
   }
