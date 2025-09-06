@@ -20,12 +20,12 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
 // Pin Definitions
 // Row input pins (teclado conectado de pin 3 al 9)
-const int row1Pin = 3;
-const int row2Pin = 4;
-const int row3Pin = 5;
-const int row4Pin = 6;
-const int row5Pin = 7;
-const int row6Pin = 8;
+const int row1Pin = 4;
+const int row2Pin = 5;
+const int row3Pin = 6;
+const int row4Pin = 7;
+const int row5Pin = 8;
+const int row6Pin = 9;
 
 // 74HC595 pins (data pin al clock pin: 10, 11, 12)
 const int dataPin = 10;
@@ -37,6 +37,9 @@ const int btn1Pin = 13;  // Botón 1
 const int btn2Pin = A5;  // Botón 2  
 const int btn3Pin = A1;  // Botón 3
 
+// Buzzer para metrónomo
+const int buzzerPin = A4;  // Buzzer en A4
+
 boolean keyPressed[NUM_ROWS][NUM_COLS];
 uint8_t keyToMidiMap[NUM_ROWS][NUM_COLS];
 
@@ -45,12 +48,21 @@ bool oledWorking = false;
 int lastPlayedNote = -1;
 int notesPlayedCount = 0;
 unsigned long lastDisplayUpdate = 0;
+unsigned long noteDisplayTime = 0; // Para mantener la nota visible por un tiempo
 
 // Variables para botones
 int currentOctave = 0;  // Octava actual (-2 a +2)
-int currentMode = 0;    // Modo actual (0=Piano, 1=Info, 2=Config)
+int currentMode = 0;    // Modo actual (0=Piano, 1=Metrónomo)
 unsigned long lastButtonPress[3] = {0, 0, 0}; // Debounce para los 3 botones
 #define BUTTON_DEBOUNCE 300
+
+// Variables para metrónomo
+int metronomeBPM = 120;  // BPM por defecto
+bool metronomeActive = false;
+unsigned long lastBeatTime = 0;
+bool beatOn = false;
+#define MIN_BPM 60
+#define MAX_BPM 200
 
 // bitmasks for scanning columns
 int bits[] =
@@ -122,6 +134,10 @@ void setup()
   pinMode(btn2Pin, INPUT_PULLUP);
   pinMode(btn3Pin, INPUT_PULLUP);
   
+  // Configurar buzzer
+  pinMode(buzzerPin, OUTPUT);
+  digitalWrite(buzzerPin, LOW);
+  
   Serial.println("Sistema MIDI con OLED listo!");
 }
 
@@ -165,6 +181,11 @@ void loop()
   // Manejar botones
   handleButtons();
   
+  // Actualizar metrónomo si está activo
+  if(metronomeActive) {
+    updateMetronome();
+  }
+  
   // Actualizar pantalla cada 500ms
   unsigned long now = millis();
   if(oledWorking && (now - lastDisplayUpdate > 500)) {
@@ -207,6 +228,7 @@ void noteOn(int row, int col)
   
   // Actualizar variables para la pantalla
   lastPlayedNote = midiNote;
+  noteDisplayTime = millis(); // Marcar cuando se tocó la nota
   notesPlayedCount++;
 }
 
@@ -241,29 +263,67 @@ void controlChange(byte channel, byte control, byte value) {
 void handleButtons() {
   unsigned long now = millis();
   
-  // Botón 1 (Pin 13) - Subir octava
-  if(!digitalRead(btn1Pin) && (now - lastButtonPress[0] > BUTTON_DEBOUNCE)) {
-    lastButtonPress[0] = now;
-    currentOctave++;
-    if(currentOctave > 2) currentOctave = 2; // Límite +2 octavas
-    Serial.print("Octava: ");
-    Serial.println(currentOctave);
+  if(currentMode == 0) { // Modo Piano - Control de octavas
+    // Botón 1 (Pin 13) - Subir octava
+    if(!digitalRead(btn1Pin) && (now - lastButtonPress[0] > BUTTON_DEBOUNCE)) {
+      lastButtonPress[0] = now;
+      currentOctave++;
+      if(currentOctave > 2) currentOctave = 2; // Límite +2 octavas
+      Serial.print("Octava: ");
+      Serial.println(currentOctave);
+    }
+    
+    // Botón 2 (Pin A5) - Bajar octava
+    if(!digitalRead(btn2Pin) && (now - lastButtonPress[1] > BUTTON_DEBOUNCE)) {
+      lastButtonPress[1] = now;
+      currentOctave--;
+      if(currentOctave < -2) currentOctave = -2; // Límite -2 octavas
+      Serial.print("Octava: ");
+      Serial.println(currentOctave);
+    }
+  } else if(currentMode == 1) { // Modo Metrónomo - Control de BPM y activación
+    // Botón 1 (Pin 13) - Subir BPM
+    if(!digitalRead(btn1Pin) && (now - lastButtonPress[0] > BUTTON_DEBOUNCE)) {
+      lastButtonPress[0] = now;
+      metronomeBPM += 5;
+      if(metronomeBPM > MAX_BPM) metronomeBPM = MAX_BPM;
+      Serial.print("BPM: ");
+      Serial.println(metronomeBPM);
+    }
+    
+    // Botón 2 (Pin A5) - Bajar BPM
+    if(!digitalRead(btn2Pin) && (now - lastButtonPress[1] > BUTTON_DEBOUNCE)) {
+      lastButtonPress[1] = now;
+      metronomeBPM -= 5;
+      if(metronomeBPM < MIN_BPM) metronomeBPM = MIN_BPM;
+      Serial.print("BPM: ");
+      Serial.println(metronomeBPM);
+    }
+    
+    // Botón 3 en modo metrónomo - Activar/Desactivar metrónomo (presión larga)
+    if(!digitalRead(btn3Pin) && (now - lastButtonPress[2] > BUTTON_DEBOUNCE * 2)) {
+      metronomeActive = !metronomeActive;
+      lastBeatTime = millis(); // Reiniciar timing
+      beatOn = false;
+      noTone(buzzerPin);
+      lastButtonPress[2] = now;
+      Serial.print("Metrónomo: ");
+      Serial.println(metronomeActive ? "ACTIVO" : "INACTIVO");
+      return; // Salir temprano para no cambiar de modo
+    }
   }
   
-  // Botón 2 (Pin A5) - Bajar octava
-  if(!digitalRead(btn2Pin) && (now - lastButtonPress[1] > BUTTON_DEBOUNCE)) {
-    lastButtonPress[1] = now;
-    currentOctave--;
-    if(currentOctave < -2) currentOctave = -2; // Límite -2 octavas
-    Serial.print("Octava: ");
-    Serial.println(currentOctave);
-  }
-  
-  // Botón 3 (Pin A1) - Cambiar modo de display
+  // Botón 3 (Pin A1) - Cambiar modo de display (presión corta)
   if(!digitalRead(btn3Pin) && (now - lastButtonPress[2] > BUTTON_DEBOUNCE)) {
+    // Solo cambiar modo si no está en modo metrónomo activo
+    if(currentMode == 1 && metronomeActive) {
+      // En modo metrónomo activo, presión corta no hace nada
+      return;
+    }
+    
     lastButtonPress[2] = now;
     currentMode++;
-    if(currentMode > 2) currentMode = 0; // 3 modos: 0, 1, 2
+    if(currentMode > 1) currentMode = 0; // 2 modos: 0, 1
     Serial.print("Modo display: ");
     Serial.println(currentMode);
   }
@@ -274,83 +334,176 @@ void updateDisplay() {
   
   display.clearDisplay();
   
-  // Título
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  display.println("MIDI PIANO LEONARDO");
-  
-  // Línea separadora
-  display.drawLine(0, 10, 127, 10, SSD1306_WHITE);
+  // Dibujar borde para todos los modos
+  display.drawRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, SSD1306_WHITE);
   
   // Mostrar información según el modo
   switch(currentMode) {
-    case 0: // Modo Piano
-      display.setCursor(0, 15);
-      display.print("Modo: PIANO");
+    case 0: // Modo Piano - Dibujar teclado
+      drawPianoKeyboard();
+      break;
       
-      display.setCursor(0, 25);
-      display.print("Octava: ");
-      if(currentOctave > 0) display.print("+");
-      display.println(currentOctave);
+    case 1: // Modo Metrónomo
+      display.setTextSize(1);
+      display.setTextColor(SSD1306_WHITE);
+      display.setCursor(3, 3);
+      display.print("METRONOMO");
+      display.drawLine(3, 13, 100, 13, SSD1306_WHITE);
       
-      if(lastPlayedNote >= 0) {
-        display.setCursor(0, 35);
-        display.print("Ultima: ");
-        display.print(getNoteName(lastPlayedNote));
-        display.print(" (");
-        display.print(lastPlayedNote);
-        display.println(")");
+      // Mostrar BPM grande
+      display.setTextSize(2);
+      display.setCursor(30, 18);
+      display.print(metronomeBPM);
+      
+      display.setTextSize(1);
+      display.setCursor(75, 25);
+      display.print("BPM");
+      
+      // Estado del metrónomo
+      display.setCursor(3, 38);
+      display.print(metronomeActive ? "ON " : "OFF");
+      
+      // Indicador visual de beat
+      if(metronomeActive && beatOn) {
+        display.fillRect(90, 38, 8, 8, SSD1306_WHITE);
+      } else if(metronomeActive) {
+        display.drawRect(90, 38, 8, 8, SSD1306_WHITE);
       }
       
-      display.setCursor(0, 50);
-      display.print("Notas: ");
-      display.println(notesPlayedCount);
-      break;
+      // Mostrar última nota tocada
+      if(lastPlayedNote >= 0 && (millis() - noteDisplayTime < 2000)) {
+        display.setCursor(3, 48);
+        display.print("Nota:");
+        display.print(getNoteNameLatin(lastPlayedNote));
+      }
       
-    case 1: // Modo Info
-      display.setCursor(0, 15);
-      display.print("Modo: INFO");
-      
-      display.setCursor(0, 25);
-      display.print("Tiempo: ");
-      display.print(millis() / 1000);
-      display.print("s");
-      
-      display.setCursor(0, 35);
-      display.print("Total notas: ");
-      display.println(notesPlayedCount);
-      
-      display.setCursor(0, 45);
-      display.print("MIDI Canal: 1");
-      
-      display.setCursor(0, 55);
-      display.print("Estado: ACTIVO");
-      break;
-      
-    case 2: // Modo Config
-      display.setCursor(0, 15);
-      display.print("Modo: CONFIG");
-      
-      display.setCursor(0, 25);
-      display.print("Pines teclado: 3-8");
-      
-      display.setCursor(0, 35);
-      display.print("Shift reg: 10-12");
-      
-      display.setCursor(0, 45);
-      display.print("Botones: 13,A5,A1");
-      
-      display.setCursor(0, 55);
-      display.print("OLED: SDA/SCL");
+      display.setCursor(3, 58);
+      display.print("1/2:BPM 3:ON/OFF");
       break;
   }
   
   display.display();
 }
 
+void drawPianoKeyboard() {
+  // Título simple (el borde ya se dibuja en updateDisplay)
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(3, 3);
+  display.print("PIANO - Oct:");
+  if(currentOctave > 0) display.print("+");
+  display.print(currentOctave);
+  
+  // Mostrar nota tocada arriba del teclado
+  if(lastPlayedNote >= 0 && (millis() - noteDisplayTime < 2000)) {
+    display.setTextSize(2);
+    display.setCursor(45, 12);
+    display.println(getNoteNameLatin(lastPlayedNote));
+  }
+  
+  // Dibujar teclado (octava completa - 7 teclas blancas)
+  int keyWidth = 16;  // Ancho de cada tecla blanca (un poco más pequeño para el borde)
+  int keyHeight = 32; // Alto de las teclas (un poco más pequeño)
+  int startY = 28;    // Posición Y donde empieza el teclado (más abajo por el borde)
+  int startX = 4;     // Posición X donde empieza el teclado (más a la derecha por el borde)
+  
+  // Teclas blancas (Do, Re, Mi, Fa, Sol, La, Si)
+  for(int i = 0; i < 7; i++) {
+    int x = startX + (i * keyWidth);
+    
+    // Dibujar contorno de la tecla
+    display.drawRect(x, startY, keyWidth, keyHeight, SSD1306_WHITE);
+    
+    // Verificar si esta tecla está siendo tocada
+    bool isPressed = false;
+    if(lastPlayedNote >= 0 && (millis() - noteDisplayTime < 1000)) {
+      int noteInOctave = lastPlayedNote % 12;
+      // Mapear notas blancas: Do(0), Re(2), Mi(4), Fa(5), Sol(7), La(9), Si(11)
+      int whiteNotes[] = {0, 2, 4, 5, 7, 9, 11};
+      if(noteInOctave == whiteNotes[i]) {
+        isPressed = true;
+      }
+    }
+    
+    // Si está presionada, rellenar la tecla
+    if(isPressed) {
+      display.fillRect(x+1, startY+1, keyWidth-2, keyHeight-2, SSD1306_WHITE);
+    }
+  }
+  
+  // Dibujar teclas negras (sostenidos)
+  display.setTextColor(SSD1306_WHITE);
+  int blackKeyWidth = 10;
+  int blackKeyHeight = 20;
+  
+  // Posiciones de teclas negras ajustadas para el nuevo tamaño (Do#, Re#, Fa#, Sol#, La#)
+  int blackKeyPositions[] = {12, 28, 60, 76, 92}; // Posiciones X ajustadas para teclas más pequeñas
+  
+  for(int i = 0; i < 5; i++) {
+    bool isPressed = false;
+    if(lastPlayedNote >= 0 && (millis() - noteDisplayTime < 1000)) {
+      int noteInOctave = lastPlayedNote % 12;
+      // Mapear notas negras: Do#(1), Re#(3), Fa#(6), Sol#(8), La#(10)
+      int blackNotes[] = {1, 3, 6, 8, 10};
+      if(noteInOctave == blackNotes[i]) {
+        isPressed = true;
+      }
+    }
+    
+    if(isPressed) {
+      // Tecla negra presionada - dibujar en blanco con contorno negro
+      display.fillRect(blackKeyPositions[i], startY, blackKeyWidth, blackKeyHeight, SSD1306_WHITE);
+      display.drawRect(blackKeyPositions[i], startY, blackKeyWidth, blackKeyHeight, SSD1306_BLACK);
+    } else {
+      // Tecla negra normal - rellenar en negro con contorno blanco
+      display.fillRect(blackKeyPositions[i], startY, blackKeyWidth, blackKeyHeight, SSD1306_BLACK);
+      display.drawRect(blackKeyPositions[i], startY, blackKeyWidth, blackKeyHeight, SSD1306_WHITE);
+    }
+  }
+}
+
 String getNoteName(int noteNumber) {
   const char* noteNames[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
   int octave = (noteNumber / 12) - 1;
   return String(noteNames[noteNumber % 12]) + String(octave);
+}
+
+String getNoteNameLatin(int noteNumber) {
+  const char* noteNamesLatin[] = {"Do", "Do#", "Re", "Re#", "Mi", "Fa", "Fa#", "Sol", "Sol#", "La", "La#", "Si"};
+  int octave = (noteNumber / 12) - 1;
+  return String(noteNamesLatin[noteNumber % 12]) + String(octave);
+}
+
+// Función del metrónomo
+void updateMetronome() {
+  if(!metronomeActive) {
+    if(beatOn) {
+      noTone(buzzerPin);
+      beatOn = false;
+    }
+    return;
+  }
+  
+  unsigned long currentTime = millis();
+  unsigned long beatInterval = 60000 / metronomeBPM; // Intervalo en milisegundos
+  
+  // Tiempo del beat (sonido corto)
+  const unsigned long beatDuration = 30; // 30ms de duración del beep
+  
+  if(currentTime - lastBeatTime >= beatInterval) {
+    // Nuevo beat
+    lastBeatTime = currentTime;
+    beatOn = true;
+    
+    // Generar tono en el buzzer
+    tone(buzzerPin, 800, beatDuration); // 800Hz por 30ms
+    
+    Serial.print("Beat! BPM: ");
+    Serial.println(metronomeBPM);
+  }
+  
+  // Apagar indicador visual después de un tiempo corto
+  if(beatOn && (currentTime - lastBeatTime) > beatDuration) {
+    beatOn = false;
+  }
 }
