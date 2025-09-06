@@ -11,18 +11,18 @@
 
 // Pin Definitions
 
-// Row input pins
-const int row1Pin = 2;
-const int row2Pin = 3;
-const int row3Pin = 4;
-const int row4Pin = 5;
-const int row5Pin = 6;
-const int row6Pin = 7;
+// Row input pins (teclado conectado de pin 4 al 9)
+const int row1Pin = 4;
+const int row2Pin = 5;
+const int row3Pin = 6;
+const int row4Pin = 7;
+const int row5Pin = 8;
+const int row6Pin = 9;
 
-// 74HC595 pins
-const int dataPin = 11;
-const int latchPin = 12;
-const int clockPin = 13;
+// 74HC595 pins (data pin al clock pin: 10, 11, 12)
+const int dataPin = 10;
+const int latchPin = 11;
+const int clockPin = 12;
 
 boolean keyPressed[NUM_ROWS][NUM_COLS];
 uint8_t keyToMidiMap[NUM_ROWS][NUM_COLS];
@@ -111,7 +111,7 @@ void scanColumn(int colNum)
 {
   digitalWrite(latchPin, LOW);
 
-  if(0 <= colNum && colNum <= 9)
+  if(0 <= colNum && colNum <= 7)
   {
     shiftOut(dataPin, clockPin, MSBFIRST, B00000000); //right sr
     shiftOut(dataPin, clockPin, MSBFIRST, bits[colNum]); //left sr
@@ -126,36 +126,24 @@ void scanColumn(int colNum)
 
 void noteOn(int row, int col)
 {
-  Serial.write(NOTE_ON_CMD);
-  Serial.write(keyToMidiMap[row][col]);
-  Serial.write(NOTE_VELOCITY);
-  noteOnMIDI(0, keyToMidiMap[row][col], NOTE_VELOCITY);   // Nueva Linea Leonardo
-  MidiUSB.flush();// Nueva Linea Leonardo
-
-
-
+  noteOnMIDI(0, keyToMidiMap[row][col], NOTE_VELOCITY);
+  MidiUSB.flush();
 }
 
 void noteOff(int row, int col)
 {
-  noteOffMIDI(0, keyToMidiMap[row][col], NOTE_VELOCITY);  // Channel 0, middle C, normal velocity
+  noteOffMIDI(0, keyToMidiMap[row][col], NOTE_VELOCITY);
   MidiUSB.flush();
- 
-  
 }
 
 void noteOnMIDI(byte channel, byte pitch, byte velocity) {
   midiEventPacket_t noteOn = {0x09, 0x90 | channel, pitch, velocity};
   MidiUSB.sendMIDI(noteOn);
-  
 }
 
 void noteOffMIDI(byte channel, byte pitch, byte velocity) {
   midiEventPacket_t noteOff = {0x08, 0x80 | channel, pitch, velocity};
   MidiUSB.sendMIDI(noteOff);
- 
-  
-  
 }
 
 void controlChange(byte channel, byte control, byte value) {
