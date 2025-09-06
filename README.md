@@ -118,20 +118,71 @@ Periféricos:
 
 ## 🚀 Instalación y Uso
 
-### 1. Preparación del Arduino IDE
+### ⚡ Antes de Empezar: Identificar tu Tipo de Teclado
+
+**¿No sabes si tu teclado es PullUp o PullDown?**  
+👉 **[Guía: Cómo identificar PullUp vs PullDown](IDENTIFICAR_PULLUP_PULLDOWN.md)**
+
+Esta guía te ayudará a:
+- 🔍 Identificar visualmente tu tipo de teclado
+- 🔧 Usar un multímetro para verificar
+- 💻 Ejecutar código de diagnóstico
+- 📋 Elegir el código correcto para tu hardware
+
+### 📁 Archivos Disponibles
+
+#### 🔼 Para Teclados PullUp (más común):
+- `MidiPiano_PullUp.ino` - Versión básica solo MIDI
+- `MidiPiano_PullUpOled.ino` - Con pantalla OLED y metrónomo
+
+#### 🔽 Para Teclados PullDown:
+- `MidiPiano_PullDown.ino` - Versión básica solo MIDI  
+- `MidiPiano_PullDownOLED.ino` - Con pantalla OLED y metrónomo
+
+#### 🆕 Versión Recomendada (PullUp optimizada):
+- `MidiPiano_con_OLED/MidiPiano_con_OLED.ino` - Más actualizada
+
+### 📐 Configuración para Diferentes Tamaños
+
+**¿Tienes un teclado de diferente tamaño?**  
+👉 **[Guía de Configuración de Tamaños](CONFIGURACION_TECLADO.md)**
+
+Todos los códigos son fácilmente adaptables para:
+- Teclados pequeños (4x6 = 24 teclas)
+- Teclados medianos (6x9 = 54 teclas) ← **Actual**
+- Teclados grandes (8x12 = 96 teclas)
+- Teclados muy grandes (8x16 = 128 teclas)
+
+### 🛠️ Pasos de Instalación
+
+### 1. Identificar tu Teclado
+👉 **[Sigue esta guía primero](IDENTIFICAR_PULLUP_PULLDOWN.md)** para determinar si tu teclado es PullUp o PullDown
+
+### 2. Preparación del Arduino IDE
 ```bash
 # Seleccionar placa: Arduino Leonardo
 # Puerto: COMx (Windows) / /dev/ttyACMx (Linux)
 ```
 
-### 2. Carga del Código
-1. Clona este repositorio
-2. Abre `PianoMidiPullUp/MidiPiano_con_OLED/MidiPiano_con_OLED.ino`
-3. Verifica que todas las librerías estén instaladas
-4. Selecciona **Arduino Leonardo** como placa
-5. Compila y sube el código
+### 3. Elegir y Cargar el Código Correcto
+1. **Clona este repositorio**
+2. **Elige el archivo según tu tipo de teclado:**
+   - PullUp: `PianoMidiPullUp/MidiPiano_PullUpOled.ino`
+   - PullDown: `PianoMidiPullDown/MidiPiano_PullDownOLED.ino`
+   - Recomendado: `MidiPiano_con_OLED/MidiPiano_con_OLED.ino`
+3. **Verifica que todas las librerías estén instaladas**
+4. **Selecciona Arduino Leonardo** como placa
+5. **Compila y sube el código**
 
-### 3. Conexión MIDI
+### 4. Configurar Tamaño (si es necesario)
+Si tu teclado no es 6x9, modifica estas líneas al inicio del código:
+```cpp
+#define NUM_ROWS 6        // Tu número de filas
+#define NUM_COLS 9        // Tu número de columnas
+const int rowPins[NUM_ROWS] = {4, 5, 6, 7, 8, 9}; // Tus pines
+```
+
+### 5. Conexión MIDI
 - **Windows**: Aparece como dispositivo MIDI "Arduino Leonardo"
 - **macOS/Linux**: Reconocido automáticamente como interfaz MIDI
 - **DAW**: Usar canal MIDI 1 (por defecto)
@@ -196,7 +247,35 @@ El código incluye mensajes de debug por puerto serie (31250 baud):
 - Probar con buzzer activo (no pasivo)
 - Revisar polaridad del buzzer
 
-## 📈 Historial de Versiones
+## � Documentación Adicional
+
+### 📖 Guías de Configuración
+- **[🔍 Identificar PullUp vs PullDown](IDENTIFICAR_PULLUP_PULLDOWN.md)** - Determina qué tipo de teclado tienes
+- **[📐 Configuración de Tamaños](CONFIGURACION_TECLADO.md)** - Adapta el código para diferentes tamaños de teclado
+
+### 🖼️ Esquemas y Diagramas
+- **[Esquemas de Conexión](PianoMidiPullUp/images/)** - Diagramas de conexión visual
+- **[Matriz del Piano](PianoMidiPullUp/images/MatrizPiano.png)** - Layout de la matriz de teclas
+- **[Pinout del Arduino](PianoMidiPullUp/images/Pinout.png)** - Configuración de pines
+
+### 📁 Estructura del Proyecto
+```
+TecladoMidi/
+├── README.md                           # Este archivo
+├── IDENTIFICAR_PULLUP_PULLDOWN.md     # Guía de identificación
+├── CONFIGURACION_TECLADO.md           # Configuración de tamaños
+├── PianoMidiPullUp/                   # Códigos para PullUp
+│   ├── MidiPiano_PullUp.ino          # Básico
+│   ├── MidiPiano_PullUpOled.ino      # Con OLED
+│   └── images/                        # Esquemas
+├── PianoMidiPullDown/                 # Códigos para PullDown
+│   ├── MidiPiano_PullDown.ino        # Básico
+│   └── MidiPiano_PullDownOLED.ino    # Con OLED
+└── MidiPiano_con_OLED/               # Versión más actualizada
+    └── MidiPiano_con_OLED.ino        # Recomendado
+```
+
+## �📈 Historial de Versiones
 
 ### v2.0 (Actual)
 - ✅ 2 modos: Piano + Metrónomo
