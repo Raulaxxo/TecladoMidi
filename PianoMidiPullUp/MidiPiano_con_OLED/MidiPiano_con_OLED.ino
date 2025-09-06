@@ -51,7 +51,7 @@ unsigned long lastDisplayUpdate = 0;
 unsigned long noteDisplayTime = 0; // Para mantener la nota visible por un tiempo
 
 // Variables para botones
-int currentOctave = 0;  // Octava actual (-2 a +2)
+int currentOctave = 0;  // Octava actual (-2 a +1)
 int currentMode = 0;    // Modo actual (0=Piano, 1=Metrónomo)
 unsigned long lastButtonPress[3] = {0, 0, 0}; // Debounce para los 3 botones
 #define BUTTON_DEBOUNCE 300
@@ -220,11 +220,8 @@ void noteOn(int row, int col)
   if(midiNote < 0) midiNote = 0;
   if(midiNote > 127) midiNote = 127;
   
-  Serial.write(NOTE_ON_CMD);
-  Serial.write(midiNote);
-  Serial.write(NOTE_VELOCITY);
+  // Enviar MIDI USB
   noteOnMIDI(0, midiNote, NOTE_VELOCITY);
-  MidiUSB.flush();
   
   // Actualizar variables para la pantalla
   lastPlayedNote = midiNote;
@@ -241,18 +238,20 @@ void noteOff(int row, int col)
   if(midiNote < 0) midiNote = 0;
   if(midiNote > 127) midiNote = 127;
   
+  // Enviar MIDI USB
   noteOffMIDI(0, midiNote, NOTE_VELOCITY);
-  MidiUSB.flush();
 }
 
 void noteOnMIDI(byte channel, byte pitch, byte velocity) {
   midiEventPacket_t noteOn = {0x09, 0x90 | channel, pitch, velocity};
   MidiUSB.sendMIDI(noteOn);
+  MidiUSB.flush();
 }
 
 void noteOffMIDI(byte channel, byte pitch, byte velocity) {
   midiEventPacket_t noteOff = {0x08, 0x80 | channel, pitch, velocity};
   MidiUSB.sendMIDI(noteOff);
+  MidiUSB.flush();
 }
 
 void controlChange(byte channel, byte control, byte value) {
@@ -268,7 +267,7 @@ void handleButtons() {
     if(!digitalRead(btn1Pin) && (now - lastButtonPress[0] > BUTTON_DEBOUNCE)) {
       lastButtonPress[0] = now;
       currentOctave++;
-      if(currentOctave > 2) currentOctave = 2; // Límite +2 octavas
+      if(currentOctave > 1) currentOctave = 1; // Límite +1 octava
       Serial.print("Octava: ");
       Serial.println(currentOctave);
     }
