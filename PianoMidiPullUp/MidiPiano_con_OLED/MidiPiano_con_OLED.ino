@@ -51,7 +51,7 @@ unsigned long lastDisplayUpdate = 0;
 unsigned long noteDisplayTime = 0; // Para mantener la nota visible por un tiempo
 
 // Variables para botones
-int currentOctave = 0;  // Octava actual (-2 a +2)
+int currentOctave = 0;  // Octava actual (-2 a +1)
 int currentMode = 0;    // Modo actual (0=Piano, 1=Metrónomo)
 unsigned long lastButtonPress[3] = {0, 0, 0}; // Debounce para los 3 botones
 #define BUTTON_DEBOUNCE 300
@@ -267,7 +267,7 @@ void handleButtons() {
     if(!digitalRead(btn1Pin) && (now - lastButtonPress[0] > BUTTON_DEBOUNCE)) {
       lastButtonPress[0] = now;
       currentOctave++;
-      if(currentOctave > 2) currentOctave = 2; // Límite +2 octavas
+      if(currentOctave > 1) currentOctave = 1; // Límite +1 octava
       Serial.print("Octava: ");
       Serial.println(currentOctave);
     }
