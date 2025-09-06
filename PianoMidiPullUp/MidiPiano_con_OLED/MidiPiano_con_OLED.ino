@@ -1,0 +1,356 @@
+#include "MIDIUSB.h"
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+#define NUM_ROWS 6
+#define NUM_COLS 9
+
+#define NOTE_ON_CMD 0x90
+#define NOTE_OFF_CMD 0x80
+#define NOTE_VELOCITY 127
+
+//MIDI baud rate
+#define SERIAL_RATE 31250
+
+// OLED Configuration
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+
+// Pin Definitions
+// Row input pins (teclado conectado de pin 3 al 9)
+const int row1Pin = 3;
+const int row2Pin = 4;
+const int row3Pin = 5;
+const int row4Pin = 6;
+const int row5Pin = 7;
+const int row6Pin = 8;
+
+// 74HC595 pins (data pin al clock pin: 10, 11, 12)
+const int dataPin = 10;
+const int latchPin = 11;
+const int clockPin = 12;
+
+// Botones
+const int btn1Pin = 13;  // Botón 1
+const int btn2Pin = A5;  // Botón 2  
+const int btn3Pin = A1;  // Botón 3
+
+boolean keyPressed[NUM_ROWS][NUM_COLS];
+uint8_t keyToMidiMap[NUM_ROWS][NUM_COLS];
+
+// Variables para la pantalla
+bool oledWorking = false;
+int lastPlayedNote = -1;
+int notesPlayedCount = 0;
+unsigned long lastDisplayUpdate = 0;
+
+// Variables para botones
+int currentOctave = 0;  // Octava actual (-2 a +2)
+int currentMode = 0;    // Modo actual (0=Piano, 1=Info, 2=Config)
+unsigned long lastButtonPress[3] = {0, 0, 0}; // Debounce para los 3 botones
+#define BUTTON_DEBOUNCE 300
+
+// bitmasks for scanning columns
+int bits[] =
+{ 
+  B11111110,
+  B11111101,
+  B11111011,
+  B11110111,
+  B11101111,
+  B11011111,
+  B10111111,
+  B01111111,
+  B11111111
+};
+
+void setup()
+{
+  Serial.begin(SERIAL_RATE);
+  
+  // Inicializar OLED
+  Wire.begin();
+  delay(100);
+  
+  if(display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    oledWorking = true;
+    Serial.println("OLED inicializado correctamente");
+    
+    // Pantalla de bienvenida
+    display.clearDisplay();
+    display.setTextSize(2);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(25, 10);
+    display.println("MIDI");
+    display.setCursor(15, 35);
+    display.println("PIANO");
+    display.display();
+    delay(2000);
+  } else {
+    oledWorking = false;
+    Serial.println("Error inicializando OLED");
+  }
+
+  int note = 31;
+
+  for(int colCtr = 0; colCtr < NUM_COLS; ++colCtr)
+  {
+    for(int rowCtr = 0; rowCtr < NUM_ROWS; ++rowCtr)
+    {
+      keyPressed[rowCtr][colCtr] = false;
+      keyToMidiMap[rowCtr][colCtr] = note;
+      note++;
+    }
+  }
+
+  // setup pins output/input mode
+  pinMode(dataPin, OUTPUT);
+  pinMode(clockPin, OUTPUT);
+  pinMode(latchPin, OUTPUT);
+
+  pinMode(row1Pin, INPUT_PULLUP);
+  pinMode(row2Pin, INPUT_PULLUP);
+  pinMode(row3Pin, INPUT_PULLUP);
+  pinMode(row4Pin, INPUT_PULLUP);
+  pinMode(row5Pin, INPUT_PULLUP);
+  pinMode(row6Pin, INPUT_PULLUP);
+  
+  // Configurar botones
+  pinMode(btn1Pin, INPUT_PULLUP);
+  pinMode(btn2Pin, INPUT_PULLUP);
+  pinMode(btn3Pin, INPUT_PULLUP);
+  
+  Serial.println("Sistema MIDI con OLED listo!");
+}
+
+void loop()
+{
+  for (int colCtr = 0; colCtr < NUM_COLS; ++colCtr)
+  {
+    //scan next column
+    scanColumn(colCtr);
+
+    //get row values at this column
+    int rowValue[NUM_ROWS];
+    rowValue[0] = !digitalRead(row1Pin);
+    rowValue[1] = !digitalRead(row2Pin);
+    rowValue[2] = !digitalRead(row3Pin);
+    rowValue[3] = !digitalRead(row4Pin);
+    rowValue[4] = !digitalRead(row5Pin);
+    rowValue[5] = !digitalRead(row6Pin);
+
+    // process keys pressed
+    for(int rowCtr=0; rowCtr<NUM_ROWS; ++rowCtr)
+    {
+      if(rowValue[rowCtr] != 0 && !keyPressed[rowCtr][colCtr])
+      {
+        keyPressed[rowCtr][colCtr] = true;
+        noteOn(rowCtr,colCtr);
+      }
+    }
+
+    // process keys released
+    for(int rowCtr=0; rowCtr<NUM_ROWS; ++rowCtr)
+    {
+      if(rowValue[rowCtr] == 0 && keyPressed[rowCtr][colCtr])
+      {
+        keyPressed[rowCtr][colCtr] = false;
+        noteOff(rowCtr,colCtr);
+      }
+    }
+  }
+  
+  // Manejar botones
+  handleButtons();
+  
+  // Actualizar pantalla cada 500ms
+  unsigned long now = millis();
+  if(oledWorking && (now - lastDisplayUpdate > 500)) {
+    lastDisplayUpdate = now;
+    updateDisplay();
+  }
+}
+
+void scanColumn(int colNum)
+{
+  digitalWrite(latchPin, LOW);
+
+  if(0 <= colNum && colNum <= 9)
+  {
+    shiftOut(dataPin, clockPin, MSBFIRST, B11111111); //right sr
+    shiftOut(dataPin, clockPin, MSBFIRST, bits[colNum]); //left sr
+  }
+  else
+  {
+    shiftOut(dataPin, clockPin, MSBFIRST, bits[colNum-8]); //right sr
+    shiftOut(dataPin, clockPin, MSBFIRST, B11111111); //left sr
+  }
+  digitalWrite(latchPin, HIGH);
+}
+
+void noteOn(int row, int col)
+{
+  // Aplicar cambio de octava
+  int midiNote = keyToMidiMap[row][col] + (currentOctave * 12);
+  
+  // Limitar rango MIDI válido (0-127)
+  if(midiNote < 0) midiNote = 0;
+  if(midiNote > 127) midiNote = 127;
+  
+  Serial.write(NOTE_ON_CMD);
+  Serial.write(midiNote);
+  Serial.write(NOTE_VELOCITY);
+  noteOnMIDI(0, midiNote, NOTE_VELOCITY);
+  MidiUSB.flush();
+  
+  // Actualizar variables para la pantalla
+  lastPlayedNote = midiNote;
+  notesPlayedCount++;
+}
+
+void noteOff(int row, int col)
+{
+  // Aplicar cambio de octava
+  int midiNote = keyToMidiMap[row][col] + (currentOctave * 12);
+  
+  // Limitar rango MIDI válido (0-127)
+  if(midiNote < 0) midiNote = 0;
+  if(midiNote > 127) midiNote = 127;
+  
+  noteOffMIDI(0, midiNote, NOTE_VELOCITY);
+  MidiUSB.flush();
+}
+
+void noteOnMIDI(byte channel, byte pitch, byte velocity) {
+  midiEventPacket_t noteOn = {0x09, 0x90 | channel, pitch, velocity};
+  MidiUSB.sendMIDI(noteOn);
+}
+
+void noteOffMIDI(byte channel, byte pitch, byte velocity) {
+  midiEventPacket_t noteOff = {0x08, 0x80 | channel, pitch, velocity};
+  MidiUSB.sendMIDI(noteOff);
+}
+
+void controlChange(byte channel, byte control, byte value) {
+  midiEventPacket_t event = {0x0B, 0xB0 | channel, control, value};
+  MidiUSB.sendMIDI(event);
+}
+
+void handleButtons() {
+  unsigned long now = millis();
+  
+  // Botón 1 (Pin 13) - Subir octava
+  if(!digitalRead(btn1Pin) && (now - lastButtonPress[0] > BUTTON_DEBOUNCE)) {
+    lastButtonPress[0] = now;
+    currentOctave++;
+    if(currentOctave > 2) currentOctave = 2; // Límite +2 octavas
+    Serial.print("Octava: ");
+    Serial.println(currentOctave);
+  }
+  
+  // Botón 2 (Pin A5) - Bajar octava
+  if(!digitalRead(btn2Pin) && (now - lastButtonPress[1] > BUTTON_DEBOUNCE)) {
+    lastButtonPress[1] = now;
+    currentOctave--;
+    if(currentOctave < -2) currentOctave = -2; // Límite -2 octavas
+    Serial.print("Octava: ");
+    Serial.println(currentOctave);
+  }
+  
+  // Botón 3 (Pin A1) - Cambiar modo de display
+  if(!digitalRead(btn3Pin) && (now - lastButtonPress[2] > BUTTON_DEBOUNCE)) {
+    lastButtonPress[2] = now;
+    currentMode++;
+    if(currentMode > 2) currentMode = 0; // 3 modos: 0, 1, 2
+    Serial.print("Modo display: ");
+    Serial.println(currentMode);
+  }
+}
+
+void updateDisplay() {
+  if(!oledWorking) return;
+  
+  display.clearDisplay();
+  
+  // Título
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.println("MIDI PIANO LEONARDO");
+  
+  // Línea separadora
+  display.drawLine(0, 10, 127, 10, SSD1306_WHITE);
+  
+  // Mostrar información según el modo
+  switch(currentMode) {
+    case 0: // Modo Piano
+      display.setCursor(0, 15);
+      display.print("Modo: PIANO");
+      
+      display.setCursor(0, 25);
+      display.print("Octava: ");
+      if(currentOctave > 0) display.print("+");
+      display.println(currentOctave);
+      
+      if(lastPlayedNote >= 0) {
+        display.setCursor(0, 35);
+        display.print("Ultima: ");
+        display.print(getNoteName(lastPlayedNote));
+        display.print(" (");
+        display.print(lastPlayedNote);
+        display.println(")");
+      }
+      
+      display.setCursor(0, 50);
+      display.print("Notas: ");
+      display.println(notesPlayedCount);
+      break;
+      
+    case 1: // Modo Info
+      display.setCursor(0, 15);
+      display.print("Modo: INFO");
+      
+      display.setCursor(0, 25);
+      display.print("Tiempo: ");
+      display.print(millis() / 1000);
+      display.print("s");
+      
+      display.setCursor(0, 35);
+      display.print("Total notas: ");
+      display.println(notesPlayedCount);
+      
+      display.setCursor(0, 45);
+      display.print("MIDI Canal: 1");
+      
+      display.setCursor(0, 55);
+      display.print("Estado: ACTIVO");
+      break;
+      
+    case 2: // Modo Config
+      display.setCursor(0, 15);
+      display.print("Modo: CONFIG");
+      
+      display.setCursor(0, 25);
+      display.print("Pines teclado: 3-8");
+      
+      display.setCursor(0, 35);
+      display.print("Shift reg: 10-12");
+      
+      display.setCursor(0, 45);
+      display.print("Botones: 13,A5,A1");
+      
+      display.setCursor(0, 55);
+      display.print("OLED: SDA/SCL");
+      break;
+  }
+  
+  display.display();
+}
+
+String getNoteName(int noteNumber) {
+  const char* noteNames[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+  int octave = (noteNumber / 12) - 1;
+  return String(noteNames[noteNumber % 12]) + String(octave);
+}
