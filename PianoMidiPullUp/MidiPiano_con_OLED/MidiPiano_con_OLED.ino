@@ -49,7 +49,7 @@ unsigned long noteDisplayTime = 0; // Para mantener la nota visible por un tiemp
 
 // Variables para botones
 int currentOctave = 0;  // Octava actual (-2 a +2)
-int currentMode = 0;    // Modo actual (0=Piano, 1=Info, 2=Grabar/Reproducir)
+int currentMode = 0;    // Modo actual (0=Piano, 1=Grabar/Reproducir)
 unsigned long lastButtonPress[3] = {0, 0, 0}; // Debounce para los 3 botones
 #define BUTTON_DEBOUNCE 300
 
@@ -181,6 +181,9 @@ void loop()
   // Manejar botones
   handleButtons();
   
+  // Actualizar reproducción si está activa
+  updatePlayback();
+  
   // Actualizar pantalla cada 500ms
   unsigned long now = millis();
   if(oledWorking && (now - lastDisplayUpdate > 500)) {
@@ -225,6 +228,11 @@ void noteOn(int row, int col)
   lastPlayedNote = midiNote;
   noteDisplayTime = millis(); // Marcar cuando se tocó la nota
   notesPlayedCount++;
+  
+  // Grabar nota si está en modo grabación
+  if(isRecording) {
+    recordNote(midiNote, true);
+  }
 }
 
 void noteOff(int row, int col)
@@ -238,6 +246,11 @@ void noteOff(int row, int col)
   
   noteOffMIDI(0, midiNote, NOTE_VELOCITY);
   MidiUSB.flush();
+  
+  // Grabar nota si está en modo grabación
+  if(isRecording) {
+    recordNote(midiNote, false);
+  }
 }
 
 void noteOnMIDI(byte channel, byte pitch, byte velocity) {
@@ -258,26 +271,61 @@ void controlChange(byte channel, byte control, byte value) {
 void handleButtons() {
   unsigned long now = millis();
   
-  // Botón 1 (Pin 13) - Subir octava
-  if(!digitalRead(btn1Pin) && (now - lastButtonPress[0] > BUTTON_DEBOUNCE)) {
-    lastButtonPress[0] = now;
-    currentOctave++;
-    if(currentOctave > 2) currentOctave = 2; // Límite +2 octavas
-    Serial.print("Octava: ");
-    Serial.println(currentOctave);
+  if(currentMode == 0) { // Modo Piano - Control de octavas
+    // Botón 1 (Pin 13) - Subir octava
+    if(!digitalRead(btn1Pin) && (now - lastButtonPress[0] > BUTTON_DEBOUNCE)) {
+      lastButtonPress[0] = now;
+      currentOctave++;
+      if(currentOctave > 2) currentOctave = 2; // Límite +2 octavas
+      Serial.print("Octava: ");
+      Serial.println(currentOctave);
+    }
+    
+    // Botón 2 (Pin A5) - Bajar octava
+    if(!digitalRead(btn2Pin) && (now - lastButtonPress[1] > BUTTON_DEBOUNCE)) {
+      lastButtonPress[1] = now;
+      currentOctave--;
+      if(currentOctave < -2) currentOctave = -2; // Límite -2 octavas
+      Serial.print("Octava: ");
+      Serial.println(currentOctave);
+    }
+  } else if(currentMode == 1) { // Modo Grabación - Control de grabación/reproducción
+    // Botón 1 (Pin 13) - Iniciar/Parar grabación
+    if(!digitalRead(btn1Pin) && (now - lastButtonPress[0] > BUTTON_DEBOUNCE)) {
+      lastButtonPress[0] = now;
+      if(!isRecording && !isPlaying) {
+        startRecording();
+      } else if(isRecording) {
+        stopRecording();
+      }
+    }
+    
+    // Botón 2 (Pin A5) - Reproducir secuencia grabada
+    if(!digitalRead(btn2Pin) && (now - lastButtonPress[1] > BUTTON_DEBOUNCE)) {
+      lastButtonPress[1] = now;
+      if(!isRecording && !isPlaying && recordedCount > 0) {
+        startPlayback();
+      } else if(isPlaying) {
+        stopPlayback();
+      }
+    }
+    
+    // Botón 3 en modo grabación - Borrar todo (mantener presionado más tiempo)
+    if(!digitalRead(btn3Pin) && (now - lastButtonPress[2] > BUTTON_DEBOUNCE * 5)) {
+      clearRecording();
+      lastButtonPress[2] = now;
+      return; // Salir temprano para no cambiar de modo
+    }
   }
   
-  // Botón 2 (Pin A5) - Bajar octava
-  if(!digitalRead(btn2Pin) && (now - lastButtonPress[1] > BUTTON_DEBOUNCE)) {
-    lastButtonPress[1] = now;
-    currentOctave--;
-    if(currentOctave < -2) currentOctave = -2; // Límite -2 octavas
-    Serial.print("Octava: ");
-    Serial.println(currentOctave);
-  }
-  
-  // Botón 3 (Pin A1) - Cambiar modo de display
+  // Botón 3 (Pin A1) - Cambiar modo de display (presión corta)
   if(!digitalRead(btn3Pin) && (now - lastButtonPress[2] > BUTTON_DEBOUNCE)) {
+    // Solo cambiar modo si no está en modo grabación con presión larga
+    if(currentMode == 1) {
+      // En modo grabación, presión corta no hace nada (debe ser larga para borrar)
+      return;
+    }
+    
     lastButtonPress[2] = now;
     currentMode++;
     if(currentMode > 1) currentMode = 0; // 2 modos: 0, 1
@@ -300,56 +348,37 @@ void updateDisplay() {
       drawPianoKeyboard();
       break;
       
-    case 1: // Modo Info
+    case 1: // Modo Grabar/Reproducir
       display.setTextSize(1);
       display.setTextColor(SSD1306_WHITE);
       display.setCursor(3, 3);
-      display.println("MODO: INFO");
+      display.println("MODO: GRABACION");
       display.drawLine(3, 13, 124, 13, SSD1306_WHITE);
       
       display.setCursor(3, 18);
-      display.print("Tiempo: ");
-      display.print(millis() / 1000);
-      display.print("s");
+      if(isRecording) {
+        display.print("GRABANDO... ");
+        display.print(recordedCount);
+        display.print("/");
+        display.print(MAX_RECORDED_NOTES);
+      } else if(isPlaying) {
+        display.print("REPRODUCIENDO...");
+      } else {
+        display.print("LISTO PARA GRABAR");
+      }
       
       display.setCursor(3, 28);
-      display.print("Total notas: ");
-      display.println(notesPlayedCount);
+      display.print("Notas grabadas: ");
+      display.println(recordedCount);
       
       display.setCursor(3, 38);
-      display.print("MIDI Canal: 1");
+      display.print("Btn1: Grabar");
       
       display.setCursor(3, 48);
-      display.print("Octava: ");
-      if(currentOctave > 0) display.print("+");
-      display.println(currentOctave);
+      display.print("Btn2: Reproducir");
       
       display.setCursor(3, 58);
-      display.print("Estado: ACTIVO");
-      break;
-      
-    case 2: // Modo Config
-      display.setTextSize(1);
-      display.setTextColor(SSD1306_WHITE);
-      display.setCursor(3, 3);
-      display.println("MODO: CONFIG");
-      display.drawLine(3, 13, 124, 13, SSD1306_WHITE);
-      
-      display.setCursor(3, 18);
-      display.print("Pines teclado: 3-8");
-      
-      display.setCursor(3, 28);
-      display.print("Shift reg: 10-12");
-      
-      display.setCursor(3, 38);
-      display.print("Botones: 13,A5,A1");
-      
-      display.setCursor(3, 48);
-      display.print("OLED: SDA/SCL");
-      
-      display.setCursor(3, 58);
-      display.print("Octava: ");
-      display.println(currentOctave);
+      display.print("Btn3: Borrar todo");
       break;
   }
   
@@ -443,4 +472,89 @@ String getNoteNameLatin(int noteNumber) {
   const char* noteNamesLatin[] = {"Do", "Do#", "Re", "Re#", "Mi", "Fa", "Fa#", "Sol", "Sol#", "La", "La#", "Si"};
   int octave = (noteNumber / 12) - 1;
   return String(noteNamesLatin[noteNumber % 12]) + String(octave);
+}
+
+// Funciones de grabación y reproducción
+void startRecording() {
+  recordedCount = 0;
+  isRecording = true;
+  isPlaying = false;
+  recordStartTime = millis();
+  Serial.println("Iniciando grabación...");
+}
+
+void stopRecording() {
+  isRecording = false;
+  Serial.print("Grabación finalizada. Notas grabadas: ");
+  Serial.println(recordedCount);
+}
+
+void clearRecording() {
+  recordedCount = 0;
+  isRecording = false;
+  isPlaying = false;
+  Serial.println("Grabación borrada");
+}
+
+void startPlayback() {
+  if(recordedCount == 0) return;
+  
+  isPlaying = true;
+  isRecording = false;
+  playStartTime = millis();
+  currentPlayIndex = 0;
+  Serial.println("Iniciando reproducción...");
+}
+
+void stopPlayback() {
+  isPlaying = false;
+  currentPlayIndex = 0;
+  Serial.println("Reproducción detenida");
+}
+
+void recordNote(uint8_t note, bool isNoteOn) {
+  if(!isRecording || recordedCount >= MAX_RECORDED_NOTES) return;
+  
+  recordedSequence[recordedCount].note = note;
+  recordedSequence[recordedCount].timestamp = millis() - recordStartTime;
+  recordedSequence[recordedCount].isNoteOn = isNoteOn;
+  recordedCount++;
+  
+  Serial.print("Nota grabada: ");
+  Serial.print(note);
+  Serial.print(isNoteOn ? " ON" : " OFF");
+  Serial.print(" en tiempo: ");
+  Serial.println(recordedSequence[recordedCount-1].timestamp);
+}
+
+void updatePlayback() {
+  if(!isPlaying || currentPlayIndex >= recordedCount) {
+    if(isPlaying && currentPlayIndex >= recordedCount) {
+      stopPlayback();
+    }
+    return;
+  }
+  
+  unsigned long currentTime = millis() - playStartTime;
+  
+  while(currentPlayIndex < recordedCount && 
+        currentTime >= recordedSequence[currentPlayIndex].timestamp) {
+    
+    uint8_t note = recordedSequence[currentPlayIndex].note;
+    bool isNoteOn = recordedSequence[currentPlayIndex].isNoteOn;
+    
+    if(isNoteOn) {
+      noteOn(0, note, NOTE_VELOCITY);
+      Serial.print("Reproduciendo: ");
+      Serial.print(note);
+      Serial.println(" ON");
+    } else {
+      noteOff(0, note, NOTE_VELOCITY);
+      Serial.print("Reproduciendo: ");
+      Serial.print(note);
+      Serial.println(" OFF");
+    }
+    
+    currentPlayIndex++;
+  }
 }
